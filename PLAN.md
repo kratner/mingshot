@@ -151,8 +151,8 @@ Each milestone ends with tests that ran plus what Keith checks by hand.
    one of them is ready for other people?
 3. **Default hotkey:** ⌃⇧2 (doesn't clash with macOS's ⌘⇧3/4/5), or take over ⌘⇧4 / Print Screen when
    MingShot is running, as Snagit and Snipping Tool can?
-4. **Repo:** public from day one (MIT, like MingTab and MingDesk)? Create an empty `kratner/mingshot` on GitHub;
-   this machine's `gh` is the work account, so pushing goes over SSH.
+4. ~~Repo~~ **Decided 2026-11-16:** public, MIT: <https://github.com/kratner/mingshot>. Decisions are tracked in
+   kratner/planning (private).
 5. **Video (M6):** keep it in scope, or leave video to existing tools and stop at stills?
 
 ---
