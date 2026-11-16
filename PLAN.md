@@ -37,7 +37,7 @@ Grouped by milestone (§6). **Bold** = in the first usable version (M1–M3).
 - **Repeat last region** hotkey (the same rectangle again: good for before/after shots).
 - **Delay timer** (3/5/10 s) for menus that close when you press a key.
 - Scrolling capture: a long web page or document in one image (M5).
-- Video: record a region or window, with optional microphone and webcam; trim; export MP4 or GIF (M6).
+- ~~Video: record a region or window, with optional microphone and webcam; trim; export MP4 or GIF (M6).~~ Out of scope (§7.5).
 - Grab text (OCR): select a region and get its text on the clipboard instead of an image (M4).
 
 **Editor** (opens straight after a capture, or skip it and copy/save)
@@ -105,8 +105,8 @@ So MingShot is a desktop app. It does **not** have to go through the App Store:
 - **Library index:** SQLite (`rusqlite`) — captures, tags, OCR text (FTS5 for search). Rebuildable from the
   folder if it's ever lost.
 - **OCR:** on-device and free: Apple Vision on the Mac, `Windows.Media.Ocr` on Windows. No cloud.
-- **Video (M6):** ScreenCaptureKit stream → AVAssetWriter on the Mac; Windows Graphics Capture → Media
-  Foundation on Windows. GIF via `gifski`.
+- ~~**Video (M6):** ScreenCaptureKit stream → AVAssetWriter on the Mac; Windows Graphics Capture → Media
+  Foundation on Windows. GIF via `gifski`.~~ Dropped (§7.5).
 - **Shared with MingDesk:** window enumeration and the permission onboarding pattern. If both end up needing the
   same code, it moves into a small shared crate rather than being copied twice.
 
@@ -139,21 +139,21 @@ Each milestone ends with tests that ran plus what Keith checks by hand.
 | **M3** | **Library:** auto-save, grid, search by app/title/date, tags, stars, re-open to edit, open folder. **First version Keith uses daily.** | Index rebuild from the folder test; by hand for a week. |
 | **M4** | **Text and polish:** OCR "grab text", OCR'd library search, spotlight, magnify, stamps, cut out, simplify, PDF export. | OCR accuracy checked on a fixed set of screenshots. |
 | **M5** | **Windows** port of M0–M4, installer. Scrolling capture on both. | M0–M3 tests on Windows; scrolling capture of a long page compared with a known full-page render. |
-| **M6** | **Video:** record region/window with mic and webcam, trim, MP4 and GIF. | A recorded test pattern checked for dropped frames and A/V sync. |
+| ~~M6~~ | ~~**Video:** record region/window with mic and webcam, trim, MP4 and GIF.~~ **Dropped 2026-11-16 (§7.5): stills only.** | |
 | later | Templates (Snagit's multi-image layouts), presets that capture and save in one keystroke, a hand-off to MingTab/MingDesk. | |
 
 ---
 
-## 7. Decisions needed (Keith)
+## 7. Decisions (Keith, 2026-11-16)
 
-1. **Name:** MingShot, or one of §8?
-2. **Apple Developer Program ($99/yr):** enrol now (covers MingShot and MingDesk), or keep self-signed until
-   one of them is ready for other people?
-3. **Default hotkey:** ⌃⇧2 (doesn't clash with macOS's ⌘⇧3/4/5), or take over ⌘⇧4 / Print Screen when
-   MingShot is running, as Snagit and Snipping Tool can?
-4. ~~Repo~~ **Decided 2026-11-16:** public, MIT: <https://github.com/kratner/mingshot>. Decisions are tracked in
-   kratner/planning (private).
-5. **Video (M6):** keep it in scope, or leave video to existing tools and stop at stills?
+All settled; tracked in kratner/planning#1 (private).
+
+1. **Name:** MingShot.
+2. **Apple Developer Program ($99/yr):** not yet. Self-signed until MingShot or MingDesk is ready for other
+   people; enrol then (one membership covers both).
+3. **Default hotkey:** ⌃⇧2 (no clash with macOS's ⌘⇧3/4/5); changeable in settings. No takeover of ⌘⇧4.
+4. **Repo:** public, MIT: <https://github.com/kratner/mingshot>.
+5. **Video:** out of scope. Stills only; video stays with existing tools (⌘⇧5, Loom). M6 is dropped.
 
 ---
 
