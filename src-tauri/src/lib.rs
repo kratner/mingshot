@@ -89,8 +89,9 @@ mod app {
     }
 
     /// Makes the selection-UI window for every attached display that doesn't have one. Done at launch, so New only
-    /// pays for it when a display has been plugged in since.
-    fn ensure_overlays(app: &AppHandle) {
+    /// pays for it when a display has been plugged in since. Returns whether it made any.
+    fn ensure_overlays(app: &AppHandle) -> bool {
+        let mut made = false;
         for d in capture::displays() {
             let label = overlay_label(d.id);
             if app.get_webview_window(&label).is_some() {
@@ -113,10 +114,12 @@ mod app {
                 .position(d.bounds.x, d.bounds.y)
                 .inner_size(d.bounds.w, d.bounds.h)
                 .build();
-            if let Err(e) = built {
-                log::event(&format!("overlay window for display {} failed: {e}", d.id));
+            match built {
+                Ok(_) => made = true,
+                Err(e) => log::event(&format!("overlay window for display {} failed: {e}", d.id)),
             }
         }
+        made
     }
 
     fn current(id: u64) -> bool {
@@ -153,7 +156,9 @@ mod app {
 
     fn begin_inner(app: &AppHandle, id: u64, delay_s: u64) -> Result<Timings, String> {
         let mut t0 = Instant::now();
-        ensure_overlays(app);
+        if ensure_overlays(app) {
+            hide_overlays(app); // a display was plugged in: prepare its new overlay
+        }
 
         // Hide the capture window (and leave it out of captures) before anything else.
         let a = app.clone();
@@ -184,7 +189,9 @@ mod app {
         let key = on_main(app, move |mtm| {
             let waited = queued.elapsed();
             if waited.as_millis() > 40 {
-                log::event(&format!("slow: main thread took {waited:?} to pick up show_ui"));
+                log::event(&format!(
+                    "slow: main thread took {waited:?} to pick up show_ui"
+                ));
             }
             let key = overlay::display_under_mouse(mtm);
             let windows: Vec<(u32, tauri::WebviewWindow)> = capture::displays()
@@ -534,6 +541,7 @@ mod app {
                     log::event(&format!("⌃⇧2 not registered: {e}"));
                 }
                 ensure_overlays(app.handle());
+                hide_overlays(app.handle()); // prepares them for the first New
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.show();
                 }

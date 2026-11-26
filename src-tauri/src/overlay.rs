@@ -100,47 +100,56 @@ pub fn ensure_frame_window(mtm: MainThreadMarker, display: u32, frame: CGRect) {
     });
 }
 
-/// Puts the selection UI over each display, not shareable, so it can be up before the screen is read. With `key`,
-/// that display's overlay becomes the key window (so Esc reaches it) and MingShot the active app. Returns once the
-/// window server has the change (CATransaction flush); the screen shows it on its next refresh.
+/// Settings an overlay window keeps between captures, applied while it's hidden so New only has to put it on
+/// screen: above everything, on every Space, no animation, not draggable by its background, and not shareable (so
+/// it can be up before the displays are read). Changing the sharing type right as the capture requests go out
+/// coincided with ~500 ms stalls in the bench (docs/M0.md), so it's never done on New's path.
+pub fn prepare_ui(win: &NSWindow) {
+    win.setSharingType(NSWindowSharingType::None);
+    win.setLevel(UI_LEVEL);
+    win.setCollectionBehavior(behaviour());
+    win.setAnimationBehavior(NSWindowAnimationBehavior::None);
+    win.setMovable(false);
+    win.setMovableByWindowBackground(false);
+}
+
+/// Puts the selection UI over each display (already prepared: `prepare_ui`), then makes MingShot the active app and
+/// the overlay under the pointer (`key`) the key window, so Esc reaches it. The overlay is handed to the window
+/// server (CATransaction flush) before the focus change; the screen shows it on its next refresh.
 pub fn show_ui(mtm: MainThreadMarker, ui: &[(u32, &NSWindow)], key: Option<u32>) {
     let t = std::time::Instant::now();
     let screens = screen_frames(mtm);
-    // Activate first: activating afterwards lets AppKit hand key status back to whichever MingShot window had it.
-    #[allow(deprecated)]
-    NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
-    let t_activate = t.elapsed();
     let mut key_window = None;
     for (display, win) in ui {
-        win.setSharingType(NSWindowSharingType::None);
-        if let Some(rect) = screens.get(display) {
+        if let Some(rect) = screens.get(display)
+            && win.frame() != *rect
+        {
             win.setFrame_display(*rect, false);
         }
-        win.setLevel(UI_LEVEL);
-        win.setCollectionBehavior(behaviour());
-        win.setAnimationBehavior(NSWindowAnimationBehavior::None);
-        // A borderless window can be dragged around by its background; this one must stay put and get the drag.
-        win.setMovable(false);
-        win.setMovableByWindowBackground(false);
+        win.setIgnoresMouseEvents(false);
+        win.setAlphaValue(1.0);
         win.orderFrontRegardless();
         if Some(*display) == key {
             key_window = Some(*win);
         }
     }
-    let t_order = t.elapsed();
+    // On screen first: the flush hands the overlay to the window server, and nothing else is waited on.
+    CATransaction::flush();
+    let t_shown = t.elapsed();
+    // Then focus, so Esc reaches the overlay under the pointer. Activating is a handshake with the app that was
+    // active, which can take ~500 ms; done before the flush, it held the overlay back by that much in a few runs in
+    // ten (docs/M0.md). Activate before making the window key, or AppKit hands key status back to whichever
+    // MingShot window had it.
+    let app = NSApplication::sharedApplication(mtm);
+    if !app.isActive() {
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+    }
     if let Some(win) = key_window.or(ui.first().map(|(_, w)| *w)) {
         win.makeKeyAndOrderFront(None);
     }
-    let t_key = t.elapsed();
-    CATransaction::flush();
-    if t.elapsed().as_millis() > 40 {
-        crate::log::event(&format!(
-            "slow show_ui: activate {:?}, order {:?}, key {:?}, flush {:?}",
-            t_activate,
-            t_order - t_activate,
-            t_key - t_order,
-            t.elapsed() - t_key
-        ));
+    if t_shown.as_millis() > 40 {
+        crate::log::event(&format!("slow show_ui: on screen after {t_shown:?}"));
     }
 }
 
@@ -152,7 +161,6 @@ pub fn show_frame(mtm: MainThreadMarker, display: u32, image: &CGImage) {
     ensure_frame_window(mtm, display, rect);
     FRAMES.with_borrow(|map| {
         let win = &map[&display];
-        win.setSharingType(NSWindowSharingType::None);
         if let Some(layer) = win.contentView().and_then(|v| v.layer()) {
             // SAFETY: a CGImage is a valid layer `contents` object; the layer retains it.
             unsafe {
@@ -163,7 +171,11 @@ pub fn show_frame(mtm: MainThreadMarker, display: u32, image: &CGImage) {
         }
         win.orderFrontRegardless();
     });
+    let t = std::time::Instant::now();
     CATransaction::flush();
+    if t.elapsed().as_millis() > 40 {
+        crate::log::event(&format!("slow show_frame: flush {:?}", t.elapsed()));
+    }
 }
 
 /// Every display has been read: let screen sharing see the overlay again.
@@ -178,14 +190,23 @@ pub fn make_shareable(ui: &[&NSWindow]) {
     });
 }
 
-/// Takes every overlay off screen and lets go of the frozen frames (a 4K frame is 33 MB).
+/// Puts the overlays away, lets go of the frozen frames (a 4K frame is 33 MB) and gets the windows ready for the
+/// next New (not shareable again, among the rest: `prepare_ui`).
+///
+/// The selection-UI windows are not ordered out: they stay on screen, fully transparent and letting every click
+/// through. A webview that has been off screen makes AppKit wait for its web process when it comes back, and that
+/// wait timed out at ~500 ms in a few runs in ten (docs/M0.md). Kept on screen, it never goes hidden.
 pub fn hide(ui: &[&NSWindow]) {
     for win in ui {
-        win.orderOut(None);
+        win.setAlphaValue(0.0);
+        win.setIgnoresMouseEvents(true);
+        prepare_ui(win);
+        win.orderFrontRegardless();
     }
     FRAMES.with_borrow(|map| {
         for win in map.values() {
             win.orderOut(None);
+            win.setSharingType(NSWindowSharingType::None);
             if let Some(layer) = win.contentView().and_then(|v| v.layer()) {
                 unsafe { layer.setContents(None) };
             }
