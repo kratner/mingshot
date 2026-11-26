@@ -171,6 +171,10 @@ fn main() {
         }
     }
 
+    if !window_checks(&out) {
+        failed = true;
+    }
+
     println!("\nTiming, all {} displays at once:", displays.len());
     let mut times = Vec::new();
     for _ in 0..10 {
@@ -190,6 +194,128 @@ fn main() {
         std::process::exit(1);
     }
     println!("\nPASSED: every display and region pixel-exact.");
+}
+
+/// Window capture (M1): MingShot's picture of a window, with and without shadow, against the Mac's own
+/// (`screencapture -l<id>`, `-o` for no shadow) taken just before and just after. Alpha is compared too: around a
+/// window the image is transparent, and the shadow is partly so.
+#[cfg(target_os = "macos")]
+fn window_checks(out: &std::path::Path) -> bool {
+    use mingshot_lib::{capture, windows};
+    let all = windows::on_screen();
+    let picks: Vec<_> = all
+        .iter()
+        .filter(|w| w.layer == 0 && w.bounds.w >= 200.0 && w.bounds.h >= 120.0)
+        .take(4)
+        .collect();
+    println!(
+        "\nWindows vs screencapture -l ({} on screen, checking {}):",
+        all.len(),
+        picks.len()
+    );
+    let mut ok = true;
+    for w in picks {
+        for shadow in [true, false] {
+            let mut best: Option<(usize, String)> = None;
+            for _ in 0..4 {
+                let tag = if shadow { "shadow" } else { "noshadow" };
+                let before = out.join(format!("w{}-{tag}-before.png", w.id));
+                let after = out.join(format!("w{}-{tag}-after.png", w.id));
+                let id = format!("-l{}", w.id);
+                let args: Vec<&str> = if shadow { vec![&id] } else { vec!["-o", &id] };
+                if !screencapture(&args, &before) {
+                    best = Some((usize::MAX, "screencapture failed".into()));
+                    break;
+                }
+                let ours = match windows::capture(w.id, shadow) {
+                    Ok(img) => capture::encode_png(&img).unwrap(),
+                    Err(e) => {
+                        best = Some((usize::MAX, e));
+                        break;
+                    }
+                };
+                screencapture(&args, &after);
+                std::fs::write(out.join(format!("w{}-{tag}-mingshot.png", w.id)), &ours).unwrap();
+                let (b, a, o) = (
+                    decode(&std::fs::read(&before).unwrap()),
+                    decode(&std::fs::read(&after).unwrap()),
+                    decode(&ours),
+                );
+                let r = compare_either_alpha(&b, &a, &o);
+                if best.as_ref().is_none_or(|x| r.0 < x.0) {
+                    best = Some(r);
+                }
+                if best.as_ref().unwrap().0 == 0 {
+                    break;
+                }
+            }
+            let (diff, note) = best.unwrap();
+            if diff != 0 {
+                ok = false;
+            }
+            let title: String = w.title.chars().take(30).collect();
+            println!(
+                "  {} \"{}\" {}x{} pt, {}: {} {note}",
+                w.app,
+                title,
+                w.bounds.w,
+                w.bounds.h,
+                if shadow { "with shadow" } else { "no shadow" },
+                verdict(diff == 0)
+            );
+        }
+    }
+    ok
+}
+
+/// `compare_either` with alpha: every pixel that held still between `before` and `after` must match in all four
+/// channels.
+#[cfg(target_os = "macos")]
+fn compare_either_alpha(before: &Rgba, after: &Rgba, ours: &Rgba) -> (usize, String) {
+    if (before.1, before.2) != (ours.1, ours.2) {
+        return (
+            usize::MAX / 8,
+            format!(
+                "(size: screencapture {}x{}, MingShot {}x{})",
+                before.1, before.2, ours.1, ours.2
+            ),
+        );
+    }
+    if (after.1, after.2) != (ours.1, ours.2) {
+        return compare(before, ours);
+    }
+    let (mut diff, mut moving, mut worst) = (0, 0, 0u8);
+    for ((b, a), o) in before
+        .0
+        .chunks(4)
+        .zip(after.0.chunks(4))
+        .zip(ours.0.chunks(4))
+    {
+        if b != a {
+            moving += 1;
+            continue;
+        }
+        if b != o {
+            diff += 1;
+            worst = worst.max((0..4).map(|i| b[i].abs_diff(o[i])).max().unwrap());
+        }
+    }
+    let moved = if moving > 0 {
+        format!(", {moving} px moved meanwhile")
+    } else {
+        String::new()
+    };
+    if diff > 0 {
+        (
+            diff,
+            format!(
+                "({diff} of {} px, largest difference {worst}{moved})",
+                ours.1 * ours.2
+            ),
+        )
+    } else {
+        (0, format!("({}x{} px{moved})", ours.1, ours.2))
+    }
 }
 
 #[cfg(target_os = "macos")]

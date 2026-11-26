@@ -7,6 +7,8 @@ pub mod capture;
 pub mod log;
 #[cfg(target_os = "macos")]
 mod overlay;
+#[cfg(target_os = "macos")]
+pub mod windows;
 
 #[cfg(target_os = "macos")]
 mod app {

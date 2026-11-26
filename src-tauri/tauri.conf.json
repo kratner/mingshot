@@ -42,7 +42,7 @@
     "shortDescription": "Screen capture and markup.",
     "copyright": "© 2026 Keith Ratner (Four Ounces). MIT licence.",
     "macOS": {
-      "minimumSystemVersion": "15.2"
+      "minimumSystemVersion": "26.0"
     }
   }
 }
