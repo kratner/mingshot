@@ -23,6 +23,17 @@ dist-ssr
 *.sln
 *.sw?
 
-# Mobile icons that `tauri icon` always writes; MingDesk is desktop only.
+# Mobile icons that `tauri icon` always writes; MingShot is desktop only.
 src-tauri/icons/android/
 src-tauri/icons/ios/
+
+# Self-test output (real screen contents): local only.
+selftest-out/
+
+# tsc -b output
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# Last built app, kept outside target/ so cargo clean does not remove it.
+build/

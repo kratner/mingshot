@@ -1,0 +1,173 @@
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter.latin.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--fo-font-text);
+  font-size: 13px;
+  color: var(--fo-text);
+  background: var(--fo-bg);
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+/* ---- Capture window ---------------------------------------------------------------------------------------- */
+
+.capture-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 14px 16px 12px;
+  box-sizing: border-box;
+  gap: 10px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+button.new {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--fo-radius-md);
+  background: var(--fo-gold);
+  color: var(--fo-on-gold);
+  font: 600 14px var(--fo-font-text);
+  cursor: pointer;
+}
+button.new:hover {
+  filter: brightness(1.06);
+}
+button.new:active {
+  filter: brightness(0.94);
+}
+button.new:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button.new .plus {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--fo-muted);
+}
+.picker select {
+  font: 13px var(--fo-font-text);
+  color: var(--fo-text);
+  background: var(--fo-surface);
+  border: 1px solid var(--fo-line);
+  border-radius: var(--fo-radius-sm);
+  padding: 3px 6px;
+}
+
+.status {
+  min-height: 18px;
+}
+.muted {
+  color: var(--fo-muted);
+}
+.warn {
+  color: var(--fo-danger);
+}
+button.link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--fo-gold-ink);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.bench {
+  height: 100%;
+  background: #ff00ff;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+
+/* ---- Overlay (transparent window over the frozen frame) ---------------------------------------------------- */
+
+html.is-overlay,
+html.is-overlay body {
+  background: transparent;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  cursor: crosshair;
+  overflow: hidden;
+  -webkit-user-drag: none;
+  touch-action: none;
+}
+.overlay .dim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.18);
+}
+/* Outside the selection is dimmed; the selected pixels show as is. */
+.overlay .shade {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.32);
+}
+.overlay .selection {
+  position: absolute;
+  outline: 1px solid rgba(255, 255, 255, 0.9);
+}
+.overlay .size {
+  position: absolute;
+  padding: 3px 7px;
+  border-radius: var(--fo-radius-sm);
+  background: rgba(26, 25, 22, 0.86);
+  color: #fff;
+  font: 500 12px var(--fo-font-mono);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.overlay .cross-h,
+.overlay .cross-v {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+}
+.overlay .cross-h {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+.overlay .cross-v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.overlay.bench-overlay {
+  background: #ff00ff;
+}
