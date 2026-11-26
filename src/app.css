@@ -250,3 +250,28 @@ html.is-overlay body {
 .overlay.bench-overlay {
   background: #ff00ff;
 }
+
+/* The magnifier beside the pointer (Overlay.tsx). */
+.overlay .loupe {
+  position: absolute;
+  pointer-events: none;
+  padding: 1px;
+  border-radius: 8px;
+  background: rgba(26, 25, 22, 0.92);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+.overlay .loupe canvas {
+  display: block;
+  border-radius: 7px 7px 0 0;
+}
+.overlay .loupe-read {
+  padding: 4px 8px 5px;
+  color: #fff;
+  font: 500 11px var(--fo-font-mono);
+  white-space: nowrap;
+}
+.overlay .loupe-colour {
+  float: right;
+  color: rgba(255, 255, 255, 0.7);
+}

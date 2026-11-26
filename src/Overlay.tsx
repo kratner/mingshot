@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { dragEnd, hex, lockRatio, nudgeFor, rectOf as rectOfAt, snap as snapAt } from './geometry';
 
 // Events addressed to this overlay only (the global `listen` hears every window's events).
 const listen = <T,>(event: string, handler: (e: { payload: T }) => void) =>
@@ -25,13 +26,8 @@ type Targets = { mode: Mode; windows: Target[] };
 /// What a click would take now: a window, or the whole display.
 type Hover = { rect: Sel; label: string; window?: number };
 
-const snap = (v: number) => Math.round(v * devicePixelRatio) / devicePixelRatio;
-
-function rectOf(a: Pt, b: Pt): Sel {
-  const x = snap(Math.min(a.x, b.x));
-  const y = snap(Math.min(a.y, b.y));
-  return { x, y, w: snap(Math.max(a.x, b.x)) - x, h: snap(Math.max(a.y, b.y)) - y };
-}
+const snap = (v: number) => snapAt(v, devicePixelRatio);
+const rectOf = (a: Pt, b: Pt) => rectOfAt(a, b, devicePixelRatio);
 
 /// Movement under this (points) between press and release is a click, not a drag.
 const CLICK_SLOP = 4;
@@ -75,6 +71,83 @@ function labelTop(r: Sel) {
   return r.y + 10;
 }
 
+/// Side of the magnifier's patch in device pixels (matches LOUPE in lib.rs), and how much it's enlarged.
+const LOUPE = 15;
+const ZOOM = 8;
+const LOUPE_PX = LOUPE * ZOOM;
+
+/// The magnifier: the frozen frame's pixels around `at`, enlarged, with a grid, the centre pixel outlined, and the
+/// pointer's position (device pixels) and colour, or the selection's size while dragging. The pixels come from Rust,
+/// a 15×15 patch per frame drawn.
+function Loupe({ display, at, size }: { display: number; at: Pt; size: string | null }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const [colour, setColour] = useState<string | null>(null);
+  const dpr = devicePixelRatio;
+  const px = { x: Math.floor(at.x * dpr), y: Math.floor(at.y * dpr) };
+  const wanted = useRef(px);
+  wanted.current = px;
+  const inFlight = useRef(false);
+
+  useEffect(() => {
+    // One request at a time; when it lands, ask again if the pointer has moved meanwhile.
+    const fetchPatch = () => {
+      if (inFlight.current) return;
+      inFlight.current = true;
+      const p = wanted.current;
+      invoke<ArrayBuffer>('loupe', { display, x: p.x, y: p.y })
+        .then((buf) => {
+          const bytes = new Uint8ClampedArray(buf);
+          const c = canvas.current;
+          if (!c || bytes.length !== LOUPE * LOUPE * 4) return;
+          const small = document.createElement('canvas');
+          small.width = small.height = LOUPE;
+          small.getContext('2d')!.putImageData(new ImageData(bytes, LOUPE, LOUPE), 0, 0);
+          const g = c.getContext('2d')!;
+          g.imageSmoothingEnabled = false;
+          g.clearRect(0, 0, LOUPE_PX, LOUPE_PX);
+          g.drawImage(small, 0, 0, LOUPE_PX, LOUPE_PX);
+          g.strokeStyle = 'rgba(0,0,0,0.18)';
+          g.lineWidth = 1;
+          for (let i = 1; i < LOUPE; i++) {
+            g.beginPath();
+            g.moveTo(i * ZOOM + 0.5, 0);
+            g.lineTo(i * ZOOM + 0.5, LOUPE_PX);
+            g.moveTo(0, i * ZOOM + 0.5);
+            g.lineTo(LOUPE_PX, i * ZOOM + 0.5);
+            g.stroke();
+          }
+          const m = (LOUPE >> 1) * ZOOM;
+          g.strokeStyle = '#C9A24A';
+          g.lineWidth = 2;
+          g.strokeRect(m, m, ZOOM, ZOOM);
+          const k = ((LOUPE >> 1) * LOUPE + (LOUPE >> 1)) * 4;
+          setColour(bytes[k + 3] ? hex(bytes[k], bytes[k + 1], bytes[k + 2]) : null);
+        })
+        .catch(() => {})
+        .finally(() => {
+          inFlight.current = false;
+          const q = wanted.current;
+          if (q.x !== p.x || q.y !== p.y) requestAnimationFrame(fetchPatch);
+        });
+    };
+    requestAnimationFrame(fetchPatch);
+  }, [display, px.x, px.y]);
+
+  // Beside the pointer, down and to the right, flipped near the display's edges.
+  const w = LOUPE_PX + 2;
+  const left = at.x + 24 + w > innerWidth ? at.x - 24 - w : at.x + 24;
+  const top = at.y + 24 + w + 40 > innerHeight ? at.y - 24 - w - 40 : at.y + 24;
+  return (
+    <div className="loupe" style={{ left, top }}>
+      <canvas ref={canvas} width={LOUPE_PX} height={LOUPE_PX} style={{ width: LOUPE_PX, height: LOUPE_PX }} />
+      <div className="loupe-read">
+        {size ?? `${px.x}, ${px.y}`}
+        {!size && colour && <span className="loupe-colour">{colour}</span>}
+      </div>
+    </div>
+  );
+}
+
 export default function Overlay({ display }: { display: number }) {
   const [start, setStart] = useState<Pt | null>(null);
   const [end, setEnd] = useState<Pt | null>(null);
@@ -89,11 +162,30 @@ export default function Overlay({ display }: { display: number }) {
   // is drawn (the dimming gives way to the selection box). Mouse events, not pointer events: Mojave's original
   // WebKit (Safari 12) has no pointer events.
   const dragFrom = useRef<Pt | null>(null);
+  // Mid-drag adjustments (geometry.ts): arrow-key nudges in device pixels, and Shift's locked proportions.
+  const nudge = useRef<Pt>({ x: 0, y: 0 });
+  const ratio = useRef<number | null>(null);
+  const mouse = useRef<Pt | null>(null);
 
   const reset = () => {
     dragFrom.current = null;
+    nudge.current = { x: 0, y: 0 };
+    ratio.current = null;
     setStart(null);
     setEnd(null);
+  };
+
+  /// Where the dragged corner is now (pointer + nudges, Shift lock), after `shift` changes the lock if it must.
+  const corner = (shift: boolean): Pt | null => {
+    const from = dragFrom.current;
+    const at = mouse.current;
+    if (!from || !at) return null;
+    if (shift && ratio.current == null) {
+      ratio.current = lockRatio(from, dragEnd(from, at, nudge.current, devicePixelRatio, null));
+    } else if (!shift) {
+      ratio.current = null;
+    }
+    return dragEnd(from, at, nudge.current, devicePixelRatio, ratio.current);
   };
 
   const run = async (command: string, args: Record<string, unknown>) => {
@@ -134,16 +226,36 @@ export default function Overlay({ display }: { display: number }) {
       if (e.key === 'Escape') {
         reset();
         invoke('cancel_capture');
+        return;
+      }
+      if (!dragFrom.current) return;
+      const step = nudgeFor(e.key, e.altKey);
+      if (step) {
+        e.preventDefault();
+        nudge.current = { x: nudge.current.x + step.x, y: nudge.current.y + step.y };
+      }
+      if (step || e.key === 'Shift') {
+        const c = corner(e.shiftKey);
+        if (c) setEnd(c);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift' && dragFrom.current) {
+        const c = corner(false);
+        if (c) setEnd(c);
       }
     };
     const onBlur = () => reset();
     const move = (e: MouseEvent) => {
       const p = { x: e.clientX, y: e.clientY };
+      mouse.current = p;
       setPointer(p);
-      if (dragFrom.current) setEnd(p);
+      if (dragFrom.current) setEnd(corner(e.shiftKey) ?? p);
     };
     const up = (e: MouseEvent) => {
-      if (e.button === 0) finishDrag({ x: e.clientX, y: e.clientY });
+      if (e.button !== 0) return;
+      mouse.current = { x: e.clientX, y: e.clientY };
+      finishDrag(corner(e.shiftKey) ?? mouse.current);
     };
     // End-to-end test mode (scripts/e2e.swift, MINGSHOT_E2E_SELECT): the overlay under the pointer is told to make
     // the given selection, through the same path a mouse release takes. Synthetic mouse drags don't reach WebKit
@@ -154,6 +266,7 @@ export default function Overlay({ display }: { display: number }) {
       setTimeout(() => finishDrag({ x: r.x + r.w, y: r.y + r.h }), 350);
     });
     window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
@@ -162,6 +275,7 @@ export default function Overlay({ display }: { display: number }) {
       offThawed.then((f) => f());
       offE2e.then((f) => f());
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('mousemove', move);
       window.removeEventListener('mouseup', up);
@@ -171,6 +285,9 @@ export default function Overlay({ display }: { display: number }) {
   const onDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     const p = { x: e.clientX, y: e.clientY };
+    mouse.current = p;
+    nudge.current = { x: 0, y: 0 };
+    ratio.current = null;
     dragFrom.current = p;
     setStart(p);
     setEnd(p);
@@ -187,9 +304,6 @@ export default function Overlay({ display }: { display: number }) {
         <>
           <Shades r={sel} />
           <div className="selection" style={{ left: sel.x, top: sel.y, width: sel.w, height: sel.h }} />
-          <div className="size" style={{ left: sel.x, top: labelTop(sel) }}>
-            {Math.round(sel.w * dpr)} × {Math.round(sel.h * dpr)}
-          </div>
         </>
       ) : hover ? (
         <>
@@ -207,6 +321,13 @@ export default function Overlay({ display }: { display: number }) {
           <div className="cross-h" style={{ top: snap(pointer.y) }} />
           <div className="cross-v" style={{ left: snap(pointer.x) }} />
         </>
+      )}
+      {(end ?? pointer) && !bench && (
+        <Loupe
+          display={display}
+          at={sel && end ? end : (pointer as Pt)}
+          size={sel ? `${Math.round(sel.w * dpr)} × ${Math.round(sel.h * dpr)}` : null}
+        />
       )}
     </div>
   );

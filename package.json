@@ -11,7 +11,8 @@
     "test": "cd src-tauri && cargo test",
     "selftest": "cd src-tauri && cargo run --release --example selftest",
     "e2e": "sh scripts/e2e.sh",
-    "bench": "MINGSHOT_BENCH=50 build/MingShot.app/Contents/MacOS/mingshot"
+    "bench": "MINGSHOT_BENCH=50 build/MingShot.app/Contents/MacOS/mingshot",
+    "test:ui": "node src/geometry.test.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

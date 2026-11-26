@@ -42,6 +42,8 @@ mod app {
 
     struct Session {
         id: u64,
+        /// The frames' pixels, copied on the magnifier's first look at each display.
+        pixels: std::collections::HashMap<u32, Arc<capture::Pixels>>,
         frames: Vec<Arc<Frame>>,
         timings: Timings,
         /// Where the capture window was before New hid it (global points), for bench mode's check.
@@ -218,6 +220,7 @@ mod app {
             }
             *session = Some(Session {
                 id,
+                pixels: Default::default(),
                 frames: Vec::new(),
                 timings: Timings::default(),
                 hidden: None,
@@ -605,6 +608,32 @@ mod app {
         })
     }
 
+    /// Side of the magnifier's patch, in device pixels (odd, so one pixel is the centre).
+    const LOUPE: usize = 15;
+
+    /// The magnifier: a LOUPE×LOUPE patch of the frozen frame (RGBA) centred on device pixel (x, y) of a display.
+    /// Empty until that display's frame has arrived.
+    #[tauri::command]
+    fn loupe(display: u32, x: i64, y: i64) -> tauri::ipc::Response {
+        let pixels = {
+            let mut session = SESSION.lock().unwrap();
+            let Some(s) = session.as_mut() else { return tauri::ipc::Response::new(Vec::new()) };
+            match s.pixels.get(&display) {
+                Some(p) => p.clone(),
+                None => {
+                    let Some(frame) = s.frames.iter().find(|f| f.display.id == display) else {
+                        return tauri::ipc::Response::new(Vec::new());
+                    };
+                    let Some(p) = frame.pixels() else { return tauri::ipc::Response::new(Vec::new()) };
+                    let p = Arc::new(p);
+                    s.pixels.insert(display, p.clone());
+                    p
+                }
+            }
+        };
+        tauri::ipc::Response::new(pixels.patch(x, y, LOUPE))
+    }
+
     #[tauri::command]
     fn permission() -> bool {
         capture::has_permission()
@@ -735,6 +764,7 @@ mod app {
                 finish_window_capture,
                 finish_display_capture,
                 set_mode,
+                loupe,
                 cancel_capture,
                 e2e_selection,
                 permission,

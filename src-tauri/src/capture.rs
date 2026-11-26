@@ -309,6 +309,56 @@ pub fn count_magenta(frame: &Frame, area: Rect) -> usize {
     n
 }
 
+/// A frame's pixels as bytes (BGRA, rows `row` bytes apart), copied once so the magnifier can read small patches
+/// quickly.
+pub struct Pixels {
+    pub bytes: Vec<u8>,
+    pub row: usize,
+    pub w: usize,
+    pub h: usize,
+}
+
+impl Frame {
+    pub fn pixels(&self) -> Option<Pixels> {
+        use objc2_core_graphics::CGDataProvider;
+        let provider = CGImage::data_provider(Some(&self.image))?;
+        let data = CGDataProvider::data(Some(&provider))?;
+        let cf: &objc2_core_foundation::CFData = &data;
+        let len = objc2_core_foundation::CFData::length(cf) as usize;
+        // SAFETY: CFData's bytes are valid for `len` bytes while `data` lives; copied out here.
+        let bytes = unsafe { std::slice::from_raw_parts(objc2_core_foundation::CFData::byte_ptr(cf), len) }.to_vec();
+        Some(Pixels { bytes, row: CGImage::bytes_per_row(Some(&self.image)), w: self.px_w(), h: self.px_h() })
+    }
+}
+
+impl Pixels {
+    /// An n×n patch (RGBA, row by row) centred on pixel (cx, cy); outside the frame is transparent.
+    pub fn patch(&self, cx: i64, cy: i64, n: usize) -> Vec<u8> {
+        let mut out = vec![0u8; n * n * 4];
+        let half = (n / 2) as i64;
+        for j in 0..n {
+            let y = cy - half + j as i64;
+            if y < 0 || y >= self.h as i64 {
+                continue;
+            }
+            for i in 0..n {
+                let x = cx - half + i as i64;
+                if x < 0 || x >= self.w as i64 {
+                    continue;
+                }
+                let src = y as usize * self.row + x as usize * 4;
+                let dst = (j * n + i) * 4;
+                // BGRA → RGBA, opaque.
+                out[dst] = self.bytes[src + 2];
+                out[dst + 1] = self.bytes[src + 1];
+                out[dst + 2] = self.bytes[src];
+                out[dst + 3] = 255;
+            }
+        }
+        out
+    }
+}
+
 /// Puts PNG bytes on the clipboard as the only item (image only: PLAN.md §7.8).
 pub fn copy_png(png: &[u8]) {
     use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG};
@@ -329,6 +379,23 @@ mod tests {
         w: 1920.0,
         h: 1080.0,
     };
+
+    #[test]
+    fn patch_centres_and_pads() {
+        // A 3×2 frame, BGRA, pixel (x, y) has blue = x, green = y.
+        let mut bytes = Vec::new();
+        for y in 0..2u8 {
+            for x in 0..3u8 {
+                bytes.extend_from_slice(&[x, y, 9, 255]);
+            }
+        }
+        let p = Pixels { bytes, row: 12, w: 3, h: 2 };
+        let patch = p.patch(0, 0, 3); // centred on the top-left corner
+        let px = |i: usize, j: usize| &patch[(j * 3 + i) * 4..(j * 3 + i) * 4 + 4];
+        assert_eq!(px(0, 0), &[0, 0, 0, 0]); // outside: transparent
+        assert_eq!(px(1, 1), &[9, 0, 0, 255]); // (0,0) as RGBA
+        assert_eq!(px(2, 2), &[9, 1, 1, 255]); // (1,1)
+    }
 
     #[test]
     fn one_x_is_points() {
