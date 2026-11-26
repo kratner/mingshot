@@ -44,7 +44,7 @@ export default function CaptureWindow() {
   const [delay, setDelay] = useState(() => Number(stored('delay') ?? 0));
   const [mode, setMode] = useState<Mode>(() => (stored('mode') as Mode) ?? 'region');
   const [shadow, setShadow] = useState(() => stored('shadow') !== 'false');
-  const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [status, setStatus] = useState<Status>(demoStatus);
   const [bench, setBench] = useState(false);
   // Click-to-overlay time as the page sees it: from the click to start_capture returning, which happens once the
   // overlay has been handed to the window server.
@@ -99,70 +99,135 @@ export default function CaptureWindow() {
     <div className="capture-window">
       <div className="toolbar">
         <button className="new" onClick={onNew} disabled={permitted === false} title="New capture (⌃⇧2)">
-          <span className="plus">+</span> New
+          <span className="plus">+</span>New
         </button>
-        <label className="picker">
-          <span>Mode</span>
-          <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
-            <option value="region">Region</option>
-            <option value="window">Window</option>
-            <option value="display">Full display</option>
-          </select>
-        </label>
+        <div className="group">
+          <span className="group-label">Mode</span>
+          <Segmented
+            value={mode}
+            onChange={setMode}
+            options={[
+              ['region', 'Region', 'Drag a region'],
+              ['window', 'Window', 'Click a window'],
+              ['display', 'Display', 'Click a display'],
+            ]}
+          />
+        </div>
+        <div className="group">
+          <span className="group-label">Delay</span>
+          <Segmented
+            value={delay}
+            onChange={setDelay}
+            options={[
+              [0, 'Off', 'No delay'],
+              [3, '3s', '3 seconds, to open a menu first'],
+              [5, '5s', '5 seconds'],
+              [10, '10s', '10 seconds'],
+            ]}
+          />
+        </div>
         {mode === 'window' && (
-          <label className="check" title="Include the window's drop shadow (transparent around it)">
-            <input type="checkbox" checked={shadow} onChange={(e) => setShadow(e.target.checked)} />
-            Shadow
-          </label>
+          <div className="group">
+            <span className="group-label">Shadow</span>
+            <Segmented
+              value={shadow}
+              onChange={setShadow}
+              options={[
+                [true, 'On', "Include the window's drop shadow (transparent around it)"],
+                [false, 'Off', 'Just the window'],
+              ]}
+            />
+          </div>
         )}
-        <label className="picker">
-          <span>Delay</span>
-          <select value={delay} onChange={(e) => setDelay(Number(e.target.value))}>
-            <option value={0}>None</option>
-            <option value={3}>3 s</option>
-            <option value={5}>5 s</option>
-            <option value={10}>10 s</option>
-          </select>
-        </label>
       </div>
       <div className="status">
         {permitted === false ? (
-          <span className="warn">
+          <div className="status-main warn">
             MingShot needs Screen Recording to see the screen.{' '}
             <button className="link" onClick={() => invoke<boolean>('request_permission').then(setPermitted)}>
               Allow…
             </button>
-          </span>
+          </div>
         ) : (
-          <StatusLine status={status} />
+          <StatusLine status={status} mode={mode} />
         )}
       </div>
     </div>
   );
 }
 
-function StatusLine({ status }: { status: Status }) {
+/// A row of buttons, one per choice. Not a <select>: its pop-up menu doesn't open in Mojave's WebKit (Keith,
+/// 2026-11-26), and one click per choice is quicker anyway.
+function Segmented<T extends string | number | boolean>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: [T, string, string][];
+}) {
+  return (
+    <div className="segmented" role="group">
+      {options.map(([v, label, title]) => (
+        <button
+          key={String(v)}
+          className={v === value ? 'seg on' : 'seg'}
+          aria-pressed={v === value}
+          title={title}
+          onClick={() => onChange(v)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const HINTS: Record<Mode, string> = {
+  region: 'New or ⌃⇧2, then drag a region. Esc cancels.',
+  window: 'New or ⌃⇧2, then click a window (or drag a region). Esc cancels.',
+  display: 'New or ⌃⇧2, then click a display (or drag a region). Esc cancels.',
+};
+
+function StatusLine({ status, mode }: { status: Status; mode: Mode }) {
   switch (status.kind) {
     case 'idle':
-      return <span className="muted">New or ⌃⇧2, then drag a region (or click a window or display in those modes). Esc cancels.</span>;
+      return <div className="status-main muted">{HINTS[mode]}</div>;
     case 'cancelled':
-      return <span className="muted">Cancelled.</span>;
-    case 'error':
-      return <span className="warn">{status.message}</span>;
-    case 'copied': {
-      const { captured: c, clickMs } = status;
-      const t = c.timings;
-      const title = `overlay up ${t.ui_ms} ms · your display frozen ${t.frozen_ms} ms · all ${t.displays} displays ${t.all_ms} ms · copy ${c.copy_ms} ms`;
       return (
-        <span title={title}>
-          Copied {c.width} × {c.height} px.{' '}
-          <span className="muted">
-            Overlay {t.ui_ms} ms, frozen {t.frozen_ms} ms{clickMs != null ? ` (page saw ${clickMs} ms)` : ''}
-          </span>
-        </span>
+        <>
+          <div className="status-main">Cancelled</div>
+          <div className="status-sub">Nothing was copied. {HINTS[mode]}</div>
+        </>
+      );
+    case 'error':
+      return <div className="status-main warn">{status.message}</div>;
+    case 'copied': {
+      const { captured: c } = status;
+      const t = c.timings;
+      const title = `Overlay up ${t.ui_ms} ms · your display frozen ${t.frozen_ms} ms · all ${t.displays} displays ${t.all_ms} ms · copied ${c.copy_ms} ms after the click`;
+      return (
+        <>
+          <div className="status-main">
+            <span className="tick">✓</span> Copied <strong>{c.width} × {c.height}</strong> px to the clipboard
+          </div>
+          <div className="status-sub timings" title={title}>
+            Overlay {Math.round(t.ui_ms)} ms · screen frozen {Math.round(t.frozen_ms)} ms
+          </div>
+        </>
       );
     }
   }
+}
+
+/// `?demo=copied` / `?demo=cancelled`: shows that state, for looking at the design in a browser (no capture).
+function demoStatus(): Status {
+  const demo = new URLSearchParams(location.search).get('demo');
+  if (demo === 'cancelled') return { kind: 'cancelled' };
+  if (demo !== 'copied') return { kind: 'idle' };
+  const timings = { ui_ms: 18.4, frozen_ms: 62.3, all_ms: 120.1, capture_ms: 107, displays: 3, delay_s: 0 };
+  return { kind: 'copied', clickMs: null, captured: { width: 876, height: 666, bytes: 0, copy_ms: 9, timings } };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
