@@ -1,6 +1,6 @@
 # MingShot — Plan
 
-A screen capture and markup tool in the Snagit mould: press a key, grab any part of the screen, mark it up in a
+A screen capture and markup tool in the Snagit mould: click New, grab any part of the screen, mark it up in a
 real editor, and find it again later. Mac first, then Windows. A Four Ounces tool, free, MIT.
 
 Created 2026-11-16. Nothing built yet; M0 is next.
@@ -19,7 +19,7 @@ after save) and nothing remembers what you captured.
 Snagit does all of it but costs a licence per machine per year, and its Windows and Mac editions differ. Windows'
 Snipping Tool is quick but its editor is a pen and a highlighter.
 
-MingShot: one hotkey, a capture overlay, an editor good enough for how-to docs and bug reports, and a library.
+MingShot: a small capture window with a New button (as in Snipping Tool), a capture overlay, an editor good enough for how-to docs and bug reports, and a library.
 Same app on Mac and Windows. Free.
 
 ---
@@ -29,8 +29,11 @@ Same app on Mac and Windows. Free.
 Grouped by milestone (§6). **Bold** = in the first usable version (M1–M3).
 
 **Capture**
-- **One global hotkey opens the overlay** (default ⌃⇧2, changeable). The screen freezes at that instant, so
-  menus and hover states stay put while you select.
+- **A New button in the app's window starts a capture**, as in Windows' Snipping Tool (§7.6). The window is a
+  small toolbar: **New**, a **mode** picker (region / window / full display) and a **delay** picker (none,
+  3/5/10 s). Clicking New hides the MingShot window, then the screen freezes, so menus and hover states stay
+  put while you select and MingShot itself isn't in the shot.
+- The global hotkey (⌃⇧2, changeable) does the same as New, for when the window is buried.
 - **Region** (drag), **window** (hover highlights the window under the pointer, click to take it, with or without
   its shadow), **full display**, **all displays**.
 - **Loupe** with pixel position and size readout; arrow keys nudge the selection; Shift locks the aspect ratio.
@@ -133,7 +136,7 @@ Each milestone ends with tests that ran plus what Keith checks by hand.
 
 | | Milestone | Done when |
 |---|---|---|
-| **M0** | **Spike: hotkey → frozen overlay → region → PNG on the clipboard**, Mac only. Screen Recording onboarding. Menu-bar icon. | Hotkey-to-overlay time measured (target < 150 ms); a captured region compared pixel-for-pixel with `screencapture -R` on a Retina display and on an external display at a different scale. |
+| **M0** | **Spike: New button → window hides → frozen overlay → region → PNG on the clipboard**, Mac only. Capture window with the New button (§7.6); hotkey triggers the same path. Screen Recording onboarding. | Click-to-overlay time measured, including hiding the window (target < 150 ms); the MingShot window never appears in a capture; a captured region compared pixel-for-pixel with `screencapture -R` on a Retina display and on an external display at a different scale. |
 | **M1** | **Capture done properly:** window capture with hover highlight (with/without shadow), full display, loupe, nudge, repeat last region, delay timer; copy / save / open in editor choices. | Rust tests on selection-to-pixel maths per display scale; by hand on laptop alone and docked. |
 | **M2** | **Editor:** arrow, line, shapes, pen, highlighter, text, callout, step numbers, blur/pixelate, crop, border and shadow, styles, undo; copy, save, drag out; `.mingshot` sidecar re-opens editable. | Unit tests on the scene model and step renumbering; export snapshots compared against reference PNGs; Playwright tests on the editor UI. |
 | **M3** | **Library:** auto-save, grid, search by app/title/date, tags, stars, re-open to edit, open folder. **First version Keith uses daily.** | Index rebuild from the folder test; by hand for a week. |
@@ -154,6 +157,9 @@ All settled; tracked in kratner/planning#1 (private).
 3. **Default hotkey:** ⌃⇧2 (no clash with macOS's ⌘⇧3/4/5); changeable in settings. No takeover of ⌘⇧4.
 4. **Repo:** public, MIT: <https://github.com/kratner/mingshot>.
 5. **Video:** out of scope. Stills only; video stays with existing tools (⌘⇧5, Loom). M6 is dropped.
+6. **Trigger (2026-11-25):** a capture is started by a **New button in the app's interface**, like Windows'
+   Snipping Tool: a small window with New, a mode picker and a delay picker. The window hides itself before
+   the screen freezes. The ⌃⇧2 hotkey from decision 3 stays as a shortcut to the same action.
 
 ---
 
