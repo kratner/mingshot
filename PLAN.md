@@ -81,17 +81,21 @@ tools work on a canvas)
   the region's screen position. OCR text joins it in M5.
 - **Kept with the image:** in the `.mingshot` sidecar and the library index, and optionally written into the
   PNG itself (XMP / PNG text chunks) so it travels with the file.
-- **Choices when copying or pasting (M2, canvas in M3):** a default in settings plus a small menu on copy
-  (and ⌥⌘C / ⌥⌘V for "ask me this time"):
-  - *Image only*: metadata stripped. Nothing about your screen leaks.
-  - *Image + caption*: a line such as "Chrome · Page title · URL · 25 Nov 2026 14:02" under the image (on a
-    canvas it becomes an editable text object linked to the image).
-  - *Image with embedded metadata*: the PNG carries it for apps that read XMP; looks the same everywhere else.
-  - *Rich text*: image plus a linked caption, for Google Docs, Slack, Mail and Notes.
-  - *Markdown*: image file plus `[title](url)` source line, for READMEs and docs.
+- **Copying and pasting (M2, canvas in M3; Keith, 2026-11-25, §7.8):**
+  - **Default is image only.** Plain ⌘C / ⌘V (and the Copy button) carry the pixels and nothing else, so nothing
+    about your screen leaks by accident.
+  - **Metadata is opt-in through checkboxes** in a copy-options panel (the ▾ next to Copy, or ⇧⌘C):
+    - *What to include:* date and time · app · window title · URL · file path · display and size.
+    - *How to include it:* caption under the image (e.g. "Chrome · Page title · URL · 25 Nov 2026 14:02"; on a
+      canvas an editable text object linked to the image) · embedded in the PNG (XMP; looks the same
+      everywhere) · rich text (image plus linked caption, for Google Docs, Slack, Mail, Notes) · Markdown
+      (image plus a `[title](url)` source line).
+  - **"Remember these settings"** checkbox in the panel saves the ticked set. After that, one click on
+    **Copy with my settings** (a second button beside Copy) or **⌥⌘C** repeats it without opening the panel;
+    on a canvas **⌥⌘V** pastes with the same saved set. ⌘C stays image only either way. The shortcuts are
+    changeable in settings.
 - **On a canvas:** each pasted image keeps its own metadata, shown in an inspector; its caption can be toggled;
   a "Sources" list (every image's app, title and URL) can be added to the canvas or the export.
-- Field-by-field switches (e.g. never include URLs) so the caption only shows what you want shared.
 
 **Output**
 - **Copy to clipboard** (the usual end point), **save as PNG/JPEG**, **drag the image out** of the editor into
@@ -185,7 +189,7 @@ Each milestone ends with tests that ran plus what Keith checks by hand.
 |---|---|---|
 | **M0** | **Spike: New button → window hides → frozen overlay → region → PNG on the clipboard**, Mac only. Capture window with the New button (§7.6); hotkey triggers the same path. Screen Recording onboarding. | Click-to-overlay time measured, including hiding the window (target < 150 ms); the MingShot window never appears in a capture; a captured region compared pixel-for-pixel with `screencapture -R` on a Retina display and on an external display at a different scale. |
 | **M1** | **Capture done properly + metadata:** window capture with hover highlight (with/without shadow), full display, loupe, nudge, repeat last region, delay timer; copy / save / open in editor choices. **Metadata recorded with every capture** (time, app, window title, browser URL, file path, display) into the sidecar and optionally the PNG. | Rust tests on selection-to-pixel maths per display scale; metadata checked against known windows in Safari, Chrome, Finder, VS Code and a no-title app; by hand on laptop alone and docked. |
-| **M2** | **Drawing and annotation tools (editor):** arrow, line, shapes, pen, highlighter, text, callout, step numbers, blur/pixelate, crop, border and shadow, styles, undo; copy, save, drag out; `.mingshot` sidecar re-opens editable. **Metadata choices on copy:** image only / caption / embedded / rich text / Markdown, default in settings, per-copy menu. **First version Keith uses daily.** | Unit tests on the scene model and step renumbering; export snapshots compared against reference PNGs; each copy mode pasted into Google Docs, Slack, Mail, Notes and a Markdown file and checked; Playwright tests on the editor UI. |
+| **M2** | **Drawing and annotation tools (editor):** arrow, line, shapes, pen, highlighter, text, callout, step numbers, blur/pixelate, crop, border and shadow, styles, undo; copy, save, drag out; `.mingshot` sidecar re-opens editable. **Copy with metadata:** ⌘C image only; checkbox panel for fields and forms (caption / embedded / rich text / Markdown); "Remember these settings" → one-click "Copy with my settings" and ⌥⌘C. **First version Keith uses daily.** | Unit tests on the scene model and step renumbering; export snapshots compared against reference PNGs; ⌘C checked to carry no metadata; each checkbox combination pasted into Google Docs, Slack, Mail, Notes and a Markdown file and checked; saved settings survive a restart and ⌥⌘C reproduces them; Playwright tests on the editor UI. |
 | **M3** | **Canvas:** new canvas in one click, "Add to canvas" capture, paste/drop images in, every editor tool on the canvas, connectors that follow objects, snapping, align/distribute, row/column/grid arrange, groups, layers, background; per-image metadata, captions and a Sources list; save as one `.mingshot` canvas; PNG/PDF export. | Scene-model tests for connectors and arrange; export snapshots of reference canvases; by hand: a five-screenshot how-to diagram built in under five minutes. |
 | **M4** | **Library:** auto-save (captures and canvases), grid, search by app/title/URL/date, tags, stars, re-open to edit, open folder. | Index rebuild from the folder test; by hand for a week. |
 | **M5** | **Text and polish:** OCR "grab text", OCR'd library search, spotlight, magnify, stamps, cut out, simplify, PDF export. | OCR accuracy checked on a fixed set of screenshots. |
@@ -212,8 +216,9 @@ All settled; tracked in kratner/planning#1 (private).
    creation: capture and paste several screenshots onto one canvas and combine them with drawings and
    annotations to build diagrams and explanatory illustrations, and (c) metadata captured with each shot, with
    options for handling it when pasting. Placed as M2, M3 and M1–M3 (§6); the library moves to M4.
-   Open: the default paste mode. Proposed *image only* (nothing about your screen leaks by accident), with the
-   caption one click away.
+8. **Copy/paste metadata (2026-11-25, planning#29):** copy or paste is **image only by default**. Metadata is
+   added by ticking checkboxes (which fields, and how they're included). The ticked set can be retained and
+   then repeated with a single click or a keyboard shortcut.
 
 ---
 
