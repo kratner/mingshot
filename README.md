@@ -6,8 +6,9 @@ searchable library of everything you've captured. Mac first, then Windows. Free 
 A [Four Ounces](https://fourounces.live) tool, alongside [MingTab](https://github.com/kratner/mingtab) and
 [MingDesk](https://github.com/kratner/mingdesk).
 
-**Status:** M0 spike built (Mac): New / ⌃⇧2 → overlay → drag a region → PNG on the clipboard, pixel-exact. Results
-and open items: [docs/M0.md](docs/M0.md). Plan: [PLAN.md](PLAN.md).
+**Status:** M0 done; M1 in progress (Mac, macOS 26+). New / ⌃⇧2 → overlay → drag a region, or click a window
+(with or without its shadow) or a display → PNG on the clipboard, pixel-exact. Results:
+[docs/M0.md](docs/M0.md), [docs/M1.md](docs/M1.md). Plan: [PLAN.md](PLAN.md).
 
 ```sh
 npm install

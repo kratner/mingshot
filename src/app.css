@@ -83,6 +83,16 @@ button.new .plus {
   padding: 3px 6px;
 }
 
+.check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-end;
+  padding-bottom: 4px;
+  font-size: 12px;
+  color: var(--fo-text-2);
+}
+
 .status {
   min-height: 18px;
 }
@@ -141,6 +151,13 @@ html.is-overlay body {
   position: absolute;
   outline: 1px solid rgba(255, 255, 255, 0.9);
 }
+.overlay .highlight {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--fo-gold);
+  background: rgba(201, 162, 74, 0.08);
+  pointer-events: none;
+}
 .overlay .size {
   position: absolute;
   padding: 3px 7px;
@@ -149,6 +166,9 @@ html.is-overlay body {
   color: #fff;
   font: 500 12px var(--fo-font-mono);
   white-space: nowrap;
+  max-width: 60vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: none;
 }
 .overlay .cross-h,

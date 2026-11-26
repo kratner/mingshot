@@ -1,5 +1,8 @@
 // FILE: scripts/e2e.swift
-// End-to-end check of M0 (PLAN.md §6, docs/M0.md). For each display it moves the pointer to a test region's
+// End-to-end check of capture (PLAN.md §6, docs/M0.md, docs/M1.md), one mode per run (scripts/e2e.sh runs all
+// three): region, window, display.
+//
+// Region: For each display it moves the pointer to a test region's
 // corner and presses the real ⌃⇧2; MingShot runs with MINGSHOT_E2E_SELECT, so the overlay under the pointer makes
 // that region's selection through the same code a mouse release runs (synthetic mouse drags don't reach WebKit on
 // this Mac, in Safari either, so the drag itself is checked by hand). The PNG MingShot put on the clipboard must
@@ -7,6 +10,10 @@
 // before and just after: pixels that changed in between are animation and aren't compared, every other pixel must
 // be identical. `screencapture -R` (the ⌘⇧4 path) is reported for information: it differs from the screen itself
 // by a few levels over glass and blur materials. Also checks that Esc cancels and leaves the clipboard alone.
+//
+// Window: the pointer goes to an uncovered spot on up to three other apps' windows and MingShot clicks there
+// (MINGSHOT_E2E_SELECT=pointer); the clipboard must equal `screencapture -l<id>` (with shadow), alpha included.
+// Display: the pointer goes to each display and MingShot clicks; the clipboard must equal `screencapture -D`.
 //
 //   sh scripts/e2e.sh            (runs the last release build; build it first with npm run app)
 //
@@ -63,87 +70,139 @@ func pixels(_ data: Data, crop: CGRect? = nil) -> Pixels? {
     return (w, h, px)
 }
 
-/// (pixels that differ among those that held still between before and after, pixels that moved, largest difference)
-func compare(_ before: Pixels, _ after: Pixels, _ ours: Pixels) -> (Int, Int, Int) {
-    var diff = 0, moving = 0, worst = 0
-    for i in stride(from: 0, to: ours.px.count, by: 4) {
-        let still = (0..<3).allSatisfy { before.px[i + $0] == after.px[i + $0] }
-        if !still { moving += 1; continue }
-        let d = (0..<3).map { abs(Int(before.px[i + $0]) - Int(ours.px[i + $0])) }.max()!
-        if d > 0 { diff += 1; worst = max(worst, d) }
-    }
-    return (diff, moving, worst)
-}
-
 func clipboardPNG() -> Data? { NSPasteboard.general.data(forType: .png) }
 func read(_ path: String) -> Data? { try? Data(contentsOf: URL(fileURLWithPath: path)) }
 
 let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : NSTemporaryDirectory()
+let mode = CommandLine.arguments.count > 2 ? CommandLine.arguments[2] : "region"
 try? FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
-
-// The test region, relative to each display (points): matches MINGSHOT_E2E_SELECT in scripts/e2e.sh.
-let sel = CGRect(x: 140, y: 180, width: 301, height: 187)
 
 var ids = [CGDirectDisplayID](repeating: 0, count: 16)
 var count: UInt32 = 0
 CGGetActiveDisplayList(16, &ids, &count)
+let displayIDs = Array(ids.prefix(Int(count)))
 
 var failures = 0
-for (n, id) in ids.prefix(Int(count)).enumerated() {
-    let b = CGDisplayBounds(id)
-    let scale = Double(CGDisplayCopyDisplayMode(id)?.pixelWidth ?? Int(b.width)) / b.width
-    let name = "display \(id) (\(scale)x)"
-    let crop = CGRect(x: sel.minX * scale, y: sel.minY * scale, width: sel.width * scale, height: sel.height * scale)
-    let region = CGRect(x: b.minX + sel.minX, y: b.minY + sel.minY, width: sel.width, height: sel.height)
-    let rArg = "\(Int(region.minX)),\(Int(region.minY)),\(Int(region.width)),\(Int(region.height))"
-    let before = "\(out)/e2e-\(n)-before-D.png", after = "\(out)/e2e-\(n)-after-D.png"
-    let beforeR = "\(out)/e2e-\(n)-before-R.png", ours = "\(out)/e2e-\(n)-mingshot.png"
 
-    NSPasteboard.general.clearContents()
-    _ = screencapture(["-D", "\(n + 1)"], before)
-    _ = screencapture(["-R", rArg], beforeR)
-    move(region.origin); sleepMs(150)
-    hotkey()  // MingShot selects the region itself (MINGSHOT_E2E_SELECT)
-    var png: Data? = nil
-    for _ in 0..<40 { if let d = clipboardPNG() { png = d; break }; sleepMs(50) }
-    move(CGPoint(x: region.maxX + 200, y: region.maxY + 120))  // pointer out of the region for the "after" shot
-    sleepMs(300)
-    _ = screencapture(["-D", "\(n + 1)"], after)
-
-    guard let data = png else { print("FAIL \(name): nothing on the clipboard"); failures += 1; continue }
-    try? data.write(to: URL(fileURLWithPath: ours))
-    guard let m = pixels(data), let a = read(before).flatMap({ pixels($0, crop: crop) }),
-          let z = read(after).flatMap({ pixels($0, crop: crop) }) else {
-        print("FAIL \(name): couldn't decode"); failures += 1; continue
-    }
-    if (a.w, a.h) != (m.w, m.h) {
-        print("FAIL \(name): MingShot \(m.w)x\(m.h) px, the screen's region \(a.w)x\(a.h) px"); failures += 1; continue
-    }
-    let (diff, moving, worst) = compare(a, z, m)
-    var note = "-R not read"
-    if let r = read(beforeR).flatMap({ pixels($0) }), (r.w, r.h) == (m.w, m.h) {
-        let (rd, _, rw) = compare(r, r, m)
-        note = rd == 0 ? "-R identical" : "-R: \(rd) px differ by up to \(rw) levels"
-    }
-    if diff == 0 {
-        print("PASS \(name): \(m.w)x\(m.h) px identical to the screen (\(moving) px animating, not compared); \(note)")
-    } else {
-        print("FAIL \(name): \(diff) of \(m.w * m.h) px differ from the screen, up to \(worst) levels; see \(ours)")
-        failures += 1
-    }
-    sleepMs(400)
+/// Waits for MingShot's PNG on the clipboard.
+func awaitClipboard() -> Data? {
+    for _ in 0..<60 { if let d = clipboardPNG() { return d }; sleepMs(50) }
+    return nil
 }
 
-// Esc cancels: overlay goes, clipboard untouched.
-NSPasteboard.general.clearContents()
-NSPasteboard.general.setString("untouched", forType: .string)
-let b0 = CGDisplayBounds(ids[0])
-move(CGPoint(x: b0.minX + sel.minX, y: b0.minY + sel.minY)); sleepMs(150)
-hotkey(); sleepMs(150)  // before the test-mode selection (350 ms after the overlay is key)
-escape(); sleepMs(700)
-let untouched = NSPasteboard.general.string(forType: .string) == "untouched" && clipboardPNG() == nil
-print(untouched ? "PASS Esc cancels and leaves the clipboard alone" : "FAIL Esc: the clipboard changed")
-if !untouched { failures += 1 }
+/// Compares the clipboard PNG with a reference taken before and after (pixels that changed in between aren't
+/// compared; alpha too when `alpha`).
+func check(_ name: String, _ data: Data?, before: Pixels?, after: Pixels?, alpha: Bool, ours: String) {
+    guard let data = data else { print("FAIL \(name): nothing on the clipboard"); failures += 1; return }
+    try? data.write(to: URL(fileURLWithPath: ours))
+    guard let m = pixels(data), let a = before, let z = after else {
+        print("FAIL \(name): couldn't decode"); failures += 1; return
+    }
+    if (a.w, a.h) != (m.w, m.h) {
+        print("FAIL \(name): MingShot \(m.w)x\(m.h) px, reference \(a.w)x\(a.h) px"); failures += 1; return
+    }
+    let channels = alpha ? 4 : 3
+    var diff = 0, moving = 0, worst = 0
+    for i in stride(from: 0, to: m.px.count, by: 4) {
+        if !(0..<channels).allSatisfy({ a.px[i + $0] == z.px[i + $0] }) { moving += 1; continue }
+        let d = (0..<channels).map { abs(Int(a.px[i + $0]) - Int(m.px[i + $0])) }.max()!
+        if d > 0 { diff += 1; worst = max(worst, d) }
+    }
+    if diff == 0 {
+        print("PASS \(name): \(m.w)x\(m.h) px identical (\(moving) px animating, not compared)")
+    } else {
+        print("FAIL \(name): \(diff) of \(m.w * m.h) px differ, up to \(worst) levels; see \(ours)"); failures += 1
+    }
+}
 
-print(failures == 0 ? "\nE2E PASSED" : "\nE2E FAILED (\(failures))")
+switch mode {
+case "window":
+    // Windows of other apps, front to back, with a spot no window in front of them covers.
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as! [[String: Any]]
+    let own = Set(["MingShot", "Window Server", "Dock"])
+    var above: [CGRect] = []
+    var picks: [(id: Int, app: String, spot: CGPoint)] = []
+    for w in list {
+        let b = w["kCGWindowBounds"] as! [String: Double]
+        let r = CGRect(x: b["X"]!, y: b["Y"]!, width: b["Width"]!, height: b["Height"]!)
+        let app = w["kCGWindowOwnerName"] as? String ?? ""
+        let layer = w["kCGWindowLayer"] as? Int ?? 0
+        defer { if layer >= 0 && layer < 1000 { above.append(r) } }
+        guard layer == 0, !own.contains(app), r.width >= 200, r.height >= 120, picks.count < 3 else { continue }
+        // Try a grid of spots inside, away from the edges; take the first nothing in front covers.
+        var spot: CGPoint? = nil
+        outer: for fy in stride(from: 0.2, through: 0.8, by: 0.2) {
+            for fx in stride(from: 0.2, through: 0.8, by: 0.2) {
+                let p = CGPoint(x: r.minX + r.width * fx, y: r.minY + r.height * fy)
+                if !above.contains(where: { $0.contains(p) }) { spot = p; break outer }
+            }
+        }
+        if let p = spot { picks.append((w["kCGWindowNumber"] as! Int, app, p)) }
+    }
+    if picks.isEmpty { print("FAIL no uncovered window of another app to test"); failures += 1 }
+    for (n, w) in picks.enumerated() {
+        NSPasteboard.general.clearContents()
+        let before = "\(out)/e2e-win\(n)-before.png", after = "\(out)/e2e-win\(n)-after.png"
+        _ = screencapture(["-l\(w.id)"], before)
+        move(w.spot); sleepMs(150)
+        hotkey()
+        let png = awaitClipboard()
+        sleepMs(300)
+        _ = screencapture(["-l\(w.id)"], after)
+        check("window \(w.id) (\(w.app)), with shadow", png, before: read(before).flatMap { pixels($0) },
+              after: read(after).flatMap { pixels($0) }, alpha: true, ours: "\(out)/e2e-win\(n)-mingshot.png")
+        sleepMs(400)
+    }
+
+case "display":
+    for (n, id) in displayIDs.enumerated() {
+        let b = CGDisplayBounds(id)
+        NSPasteboard.general.clearContents()
+        let before = "\(out)/e2e-disp\(n)-before.png", after = "\(out)/e2e-disp\(n)-after.png"
+        _ = screencapture(["-D", "\(n + 1)"], before)
+        move(CGPoint(x: b.midX, y: b.minY + 60)); sleepMs(150)
+        hotkey()
+        let png = awaitClipboard()
+        move(CGPoint(x: b.midX, y: b.minY + 60)); sleepMs(300)
+        _ = screencapture(["-D", "\(n + 1)"], after)
+        check("display \(id)", png, before: read(before).flatMap { pixels($0) },
+              after: read(after).flatMap { pixels($0) }, alpha: false, ours: "\(out)/e2e-disp\(n)-mingshot.png")
+        sleepMs(400)
+    }
+
+default:
+    // The test region, relative to each display (points): matches MINGSHOT_E2E_SELECT in scripts/e2e.sh.
+    let sel = CGRect(x: 140, y: 180, width: 301, height: 187)
+    for (n, id) in displayIDs.enumerated() {
+        let b = CGDisplayBounds(id)
+        let scale = Double(CGDisplayCopyDisplayMode(id)?.pixelWidth ?? Int(b.width)) / b.width
+        let crop = CGRect(x: sel.minX * scale, y: sel.minY * scale, width: sel.width * scale, height: sel.height * scale)
+        let region = CGRect(x: b.minX + sel.minX, y: b.minY + sel.minY, width: sel.width, height: sel.height)
+        let before = "\(out)/e2e-\(n)-before-D.png", after = "\(out)/e2e-\(n)-after-D.png"
+        NSPasteboard.general.clearContents()
+        _ = screencapture(["-D", "\(n + 1)"], before)
+        move(region.origin); sleepMs(150)
+        hotkey()  // MingShot selects the region itself (MINGSHOT_E2E_SELECT)
+        let png = awaitClipboard()
+        move(CGPoint(x: region.maxX + 200, y: region.maxY + 120))  // pointer out of the region for the "after" shot
+        sleepMs(300)
+        _ = screencapture(["-D", "\(n + 1)"], after)
+        check("region on display \(id) (\(scale)x)", png, before: read(before).flatMap { pixels($0, crop: crop) },
+              after: read(after).flatMap { pixels($0, crop: crop) }, alpha: false, ours: "\(out)/e2e-\(n)-mingshot.png")
+        sleepMs(400)
+    }
+
+    // Esc cancels: overlay goes, clipboard untouched.
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString("untouched", forType: .string)
+    let b0 = CGDisplayBounds(displayIDs[0])
+    move(CGPoint(x: b0.minX + sel.minX, y: b0.minY + sel.minY)); sleepMs(150)
+    hotkey(); sleepMs(150)  // before the test-mode selection (350 ms after the overlay is key)
+    escape(); sleepMs(700)
+    let untouched = NSPasteboard.general.string(forType: .string) == "untouched" && clipboardPNG() == nil
+    print(untouched ? "PASS Esc cancels and leaves the clipboard alone" : "FAIL Esc: the clipboard changed")
+    if !untouched { failures += 1 }
+}
+
+print(failures == 0 ? "\nE2E \(mode) PASSED" : "\nE2E \(mode) FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

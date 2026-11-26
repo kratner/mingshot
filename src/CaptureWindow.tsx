@@ -15,6 +15,24 @@ type Timings = {
 };
 type Captured = { width: number; height: number; bytes: number; copy_ms: number; timings: Timings };
 
+type Mode = 'region' | 'window' | 'display';
+
+/// Per-viewer conveniences (mode, shadow, delay); the app works the same without them.
+function stored(key: string): string | null {
+  try {
+    return localStorage.getItem(`mingshot.${key}`);
+  } catch {
+    return null;
+  }
+}
+function store(key: string, value: string) {
+  try {
+    localStorage.setItem(`mingshot.${key}`, value);
+  } catch {
+    /* private storage unavailable: settings just aren't remembered */
+  }
+}
+
 type Status =
   | { kind: 'idle' }
   | { kind: 'copied'; captured: Captured; clickMs: number | null }
@@ -23,12 +41,22 @@ type Status =
 
 export default function CaptureWindow() {
   const [permitted, setPermitted] = useState<boolean | null>(null);
-  const [delay, setDelay] = useState(0);
+  const [delay, setDelay] = useState(() => Number(stored('delay') ?? 0));
+  const [mode, setMode] = useState<Mode>(() => (stored('mode') as Mode) ?? 'region');
+  const [shadow, setShadow] = useState(() => stored('shadow') !== 'false');
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [bench, setBench] = useState(false);
   // Click-to-overlay time as the page sees it: from the click to start_capture returning, which happens once the
   // overlay has been handed to the window server.
   const clickMs = useRef<number | null>(null);
+
+  // The mode applies to ⌃⇧2 too, so Rust keeps it; this window remembers it between launches.
+  useEffect(() => {
+    store('mode', mode);
+    store('shadow', String(shadow));
+    store('delay', String(delay));
+    invoke('set_mode', { mode, shadow });
+  }, [mode, shadow, delay]);
 
   useEffect(() => {
     invoke<boolean>('permission').then(setPermitted);
@@ -75,16 +103,18 @@ export default function CaptureWindow() {
         </button>
         <label className="picker">
           <span>Mode</span>
-          <select value="region" onChange={() => {}}>
+          <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
             <option value="region">Region</option>
-            <option value="window" disabled>
-              Window (M1)
-            </option>
-            <option value="display" disabled>
-              Full display (M1)
-            </option>
+            <option value="window">Window</option>
+            <option value="display">Full display</option>
           </select>
         </label>
+        {mode === 'window' && (
+          <label className="check" title="Include the window's drop shadow (transparent around it)">
+            <input type="checkbox" checked={shadow} onChange={(e) => setShadow(e.target.checked)} />
+            Shadow
+          </label>
+        )}
         <label className="picker">
           <span>Delay</span>
           <select value={delay} onChange={(e) => setDelay(Number(e.target.value))}>
@@ -114,7 +144,7 @@ export default function CaptureWindow() {
 function StatusLine({ status }: { status: Status }) {
   switch (status.kind) {
     case 'idle':
-      return <span className="muted">New, or ⌃⇧2, then drag a region. Esc cancels.</span>;
+      return <span className="muted">New or ⌃⇧2, then drag a region (or click a window or display in those modes). Esc cancels.</span>;
     case 'cancelled':
       return <span className="muted">Cancelled.</span>;
     case 'error':

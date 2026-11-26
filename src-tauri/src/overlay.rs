@@ -49,6 +49,15 @@ pub fn screen_frames(mtm: MainThreadMarker) -> HashMap<u32, CGRect> {
     out
 }
 
+/// The pointer in CoreGraphics' global top-left-origin points.
+pub fn mouse_cg(mtm: MainThreadMarker) -> (f64, f64) {
+    let p = NSEvent::mouseLocation();
+    let main_h = NSScreen::screens(mtm)
+        .firstObject()
+        .map_or(0.0, |s| s.frame().size.height);
+    (p.x, main_h - p.y)
+}
+
 /// The display under the pointer, if any.
 pub fn display_under_mouse(mtm: MainThreadMarker) -> Option<u32> {
     let p = NSEvent::mouseLocation();

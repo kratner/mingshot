@@ -47,6 +47,83 @@ mod app {
     }
 
     static SESSION: Mutex<Option<Session>> = Mutex::new(None);
+
+    /// What New captures (the capture window's mode picker, PLAN.md §2). ⌃⇧2 uses the same.
+    #[derive(Clone, Copy, PartialEq, Serialize, serde::Deserialize, Debug)]
+    #[serde(rename_all = "lowercase")]
+    pub enum Mode {
+        /// Drag a region.
+        Region,
+        /// Click the window under the pointer (or drag a region).
+        Window,
+        /// Click a display (or drag a region).
+        Display,
+    }
+
+    #[derive(Clone, Copy)]
+    struct Settings {
+        mode: Mode,
+        /// Window mode: include the window's shadow.
+        shadow: bool,
+    }
+
+    static SETTINGS: Mutex<Settings> = Mutex::new(Settings {
+        mode: Mode::Region,
+        shadow: true,
+    });
+
+    /// A window the overlay can highlight, in points relative to the overlay's display.
+    #[derive(Serialize, Clone)]
+    struct Target {
+        id: u32,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        app: String,
+        title: String,
+    }
+
+    #[derive(Serialize, Clone)]
+    struct Targets {
+        mode: Mode,
+        /// Front to back.
+        windows: Vec<Target>,
+    }
+
+    /// Tells each display's overlay the mode and, in window mode, the windows on it as they are now.
+    fn send_targets(app: &AppHandle, displays: &[capture::Display]) {
+        let mode = SETTINGS.lock().unwrap().mode;
+        let all = if mode == Mode::Window {
+            crate::windows::on_screen()
+        } else {
+            Vec::new()
+        };
+        for d in displays {
+            let b = d.bounds;
+            let windows = all
+                .iter()
+                .filter(|w| {
+                    let r = w.bounds;
+                    r.x < b.x + b.w && r.x + r.w > b.x && r.y < b.y + b.h && r.y + r.h > b.y
+                })
+                .map(|w| Target {
+                    id: w.id,
+                    x: w.bounds.x - b.x,
+                    y: w.bounds.y - b.y,
+                    w: w.bounds.w,
+                    h: w.bounds.h,
+                    app: w.app.clone(),
+                    title: w.title.clone(),
+                })
+                .collect();
+            let _ = app.emit_to(
+                overlay_label(d.id).as_str(),
+                "targets",
+                Targets { mode, windows },
+            );
+        }
+    }
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
     fn ms(t: Instant) -> f64 {
@@ -211,8 +288,24 @@ mod app {
             key
         })?;
         let ui_ms = ms(t0);
-        if let (Some(rect), Some(display)) = (e2e_selection(), key) {
-            let _ = app.emit_to(overlay_label(display).as_str(), "e2e-select", rect);
+        send_targets(app, &displays);
+        if let Some(display) = key {
+            let rect = if std::env::var("MINGSHOT_E2E_SELECT").as_deref() == Ok("pointer") {
+                // A click where the pointer is (window and display modes).
+                let b = displays.iter().find(|d| d.id == display).map(|d| d.bounds);
+                let p = on_main(app, overlay::mouse_cg)?;
+                b.map(|b| Rect {
+                    x: p.0 - b.x,
+                    y: p.1 - b.y,
+                    w: 0.0,
+                    h: 0.0,
+                })
+            } else {
+                e2e_selection()
+            };
+            if let Some(rect) = rect {
+                let _ = app.emit_to(overlay_label(display).as_str(), "e2e-select", rect);
+            }
         }
         if let Some(s) = SESSION.lock().unwrap().as_mut().filter(|s| s.id == id) {
             s.hidden = hidden;
@@ -312,16 +405,15 @@ mod app {
         timings: Timings,
     }
 
-    /// The selection is done: crop it from the frozen frame (waiting for it if the drag beat the capture), put it
-    /// on the clipboard, put the overlays away.
-    pub fn finish(app: &AppHandle, display: u32, sel: Rect) -> Result<Captured, String> {
+    /// Waits for a display's frozen frame (a quick drag can beat the capture), up to 5 s.
+    fn frame_for(app: &AppHandle, display: u32) -> Result<Arc<Frame>, String> {
         let t = Instant::now();
-        let frame = loop {
+        loop {
             {
                 let session = SESSION.lock().unwrap();
                 let s = session.as_ref().ok_or("no capture in progress")?;
                 if let Some(f) = s.frames.iter().find(|f| f.display.id == display) {
-                    break f.clone();
+                    return Ok(f.clone());
                 }
             }
             if t.elapsed() > Duration::from_secs(5) {
@@ -331,14 +423,33 @@ mod app {
                 return Err(format!("display {display} wasn't captured"));
             }
             std::thread::sleep(Duration::from_millis(5));
-        };
-        let session = SESSION.lock().unwrap().take();
-        let timings = session.map(|s| s.timings).unwrap_or_default();
-        let result = capture::crop_png(&frame, sel);
+        }
+    }
+
+    /// Ends the session and puts the overlays away; returns the session's timings.
+    fn end_session(app: &AppHandle) -> Timings {
+        let timings = SESSION
+            .lock()
+            .unwrap()
+            .take()
+            .map(|s| s.timings)
+            .unwrap_or_default();
         hide_overlays(app);
+        timings
+    }
+
+    /// The picture is made: on the clipboard, capture window back, and tell it what happened.
+    fn deliver(
+        app: &AppHandle,
+        result: Result<(Vec<u8>, usize, usize), String>,
+        t: Instant,
+        timings: Timings,
+        what: &str,
+    ) -> Result<Captured, String> {
         let (png, width, height) = match result {
             Ok(r) => r,
             Err(e) => {
+                log::event(&format!("{what} failed: {e}"));
                 show_main(app);
                 return Err(e);
             }
@@ -353,12 +464,53 @@ mod app {
             timings,
         };
         log::event(&format!(
-            "copied {width}x{height} px ({bytes} bytes) in {} ms",
+            "copied {what} {width}x{height} px ({bytes} bytes) in {} ms",
             captured.copy_ms
         ));
         show_main(app);
         let _ = app.emit_to("main", "captured", captured.clone());
         Ok(captured)
+    }
+
+    /// A region was dragged: crop it from the frozen frame.
+    pub fn finish(app: &AppHandle, display: u32, sel: Rect) -> Result<Captured, String> {
+        let t = Instant::now();
+        let frame = frame_for(app, display)?;
+        let timings = end_session(app);
+        deliver(app, capture::crop_png(&frame, sel), t, timings, "region")
+    }
+
+    /// A display was clicked: the whole frozen frame.
+    pub fn finish_display(app: &AppHandle, display: u32) -> Result<Captured, String> {
+        let t = Instant::now();
+        let frame = frame_for(app, display)?;
+        let timings = end_session(app);
+        let whole = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: frame.display.bounds.w,
+            h: frame.display.bounds.h,
+        };
+        deliver(app, capture::crop_png(&frame, whole), t, timings, "display")
+    }
+
+    /// A window was clicked: that window on its own, with or without its shadow (the capture window's setting).
+    pub fn finish_window(app: &AppHandle, window_id: u32) -> Result<Captured, String> {
+        let t = Instant::now();
+        if SESSION.lock().unwrap().is_none() {
+            return Err("no capture in progress".into());
+        }
+        let shadow = SETTINGS.lock().unwrap().shadow;
+        let timings = end_session(app);
+        let result = crate::windows::capture(window_id, shadow).and_then(|img| {
+            let png = capture::encode_png(&img)?;
+            let (w, h) = (
+                objc2_core_graphics::CGImage::width(Some(&img)),
+                objc2_core_graphics::CGImage::height(Some(&img)),
+            );
+            Ok((png, w, h))
+        });
+        deliver(app, result, t, timings, "window")
     }
 
     pub fn cancel(app: &AppHandle) {
@@ -384,6 +536,31 @@ mod app {
         tauri::async_runtime::spawn_blocking(move || finish(&app, display, rect))
             .await
             .map_err(|e| e.to_string())?
+    }
+
+    #[tauri::command]
+    async fn finish_window_capture(app: AppHandle, window: u32) -> Result<Captured, String> {
+        tauri::async_runtime::spawn_blocking(move || finish_window(&app, window))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    #[tauri::command]
+    async fn finish_display_capture(app: AppHandle, display: u32) -> Result<Captured, String> {
+        tauri::async_runtime::spawn_blocking(move || finish_display(&app, display))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// The capture window's mode picker and shadow setting.
+    #[tauri::command]
+    fn set_mode(mode: Mode, shadow: bool) {
+        // End-to-end test runs fix the mode (scripts/e2e.sh); the capture window mustn't change it.
+        let mode = std::env::var("MINGSHOT_E2E_MODE")
+            .ok()
+            .and_then(|m| serde_json::from_value(serde_json::Value::String(m)).ok())
+            .unwrap_or(mode);
+        *SETTINGS.lock().unwrap() = Settings { mode, shadow };
     }
 
     #[tauri::command]
@@ -513,6 +690,15 @@ mod app {
                 tauri_plugin_global_shortcut::Builder::new()
                     .with_handler(move |app, shortcut, event| {
                         if *shortcut == hotkey && event.state() == ShortcutState::Pressed {
+                            // One press can arrive twice (seen in the e2e runs): ignore a repeat within 300 ms.
+                            static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+                            {
+                                let mut last = LAST.lock().unwrap();
+                                if last.is_some_and(|t| t.elapsed() < Duration::from_millis(300)) {
+                                    return;
+                                }
+                                *last = Some(Instant::now());
+                            }
                             let app = app.clone();
                             std::thread::spawn(move || {
                                 if let Err(e) = begin(&app, 0) {
@@ -526,6 +712,9 @@ mod app {
             .invoke_handler(tauri::generate_handler![
                 start_capture,
                 finish_capture,
+                finish_window_capture,
+                finish_display_capture,
+                set_mode,
                 cancel_capture,
                 e2e_selection,
                 permission,
