@@ -15,7 +15,6 @@ use block2::RcBlock;
 use objc2_core_foundation::{CFMutableData, CFRetained, CFString, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGGetActiveDisplayList, CGImage,
-    CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess,
 };
 use objc2_foundation::{NSData, NSError};
 use objc2_image_io::CGImageDestination;
@@ -78,13 +77,13 @@ pub fn displays() -> Vec<Display> {
 }
 
 pub fn has_permission() -> bool {
-    CGPreflightScreenCaptureAccess()
+    crate::compat::has_permission()
 }
 
 /// Shows the system's Screen Recording prompt (only the first time macOS has heard of the app) and returns
 /// whether access is granted now.
 pub fn request_permission() -> bool {
-    CGRequestScreenCaptureAccess()
+    crate::compat::request_permission()
 }
 
 /// A CGImage of one display, frozen at the moment of capture. CGImages are immutable, so sharing one across
@@ -125,6 +124,19 @@ pub fn capture_each() -> Result<(Vec<Display>, Frames), String> {
         return Err("no displays".into());
     }
     let (tx, rx) = mpsc::channel::<Result<Frame, String>>();
+    if !crate::compat::modern_displays() {
+        // Before macOS 15.2: CoreGraphics, one thread per display so they're read together (compat.rs).
+        for d in &displays {
+            let (tx, display) = (tx.clone(), *d);
+            std::thread::spawn(move || {
+                let result = crate::compat::display_image(display.id)
+                    .map(|image| Frame { display, image })
+                    .and_then(check_size);
+                let _ = tx.send(result);
+            });
+        }
+        return Ok((displays, rx));
+    }
     for d in &displays {
         let tx = tx.clone();
         let display = *d;
@@ -137,20 +149,7 @@ pub fn capture_each() -> Result<(Vec<Display>, Frames), String> {
                 }),
                 None => Err(error_text(error, "capture failed")),
             };
-            let result = result.and_then(|f| {
-                if (f.px_w(), f.px_h()) == (f.display.px_w, f.display.px_h) {
-                    Ok(f)
-                } else {
-                    Err(format!(
-                        "display {} came back {}x{} px, expected {}x{}",
-                        f.display.id,
-                        f.px_w(),
-                        f.px_h(),
-                        f.display.px_w,
-                        f.display.px_h
-                    ))
-                }
-            });
+            let result = result.and_then(check_size);
             let _ = tx.send(result);
         });
         let b = d.bounds;
@@ -159,6 +158,22 @@ pub fn capture_each() -> Result<(Vec<Display>, Frames), String> {
         unsafe { SCScreenshotManager::captureImageInRect_completionHandler(rect, Some(&block)) };
     }
     Ok((displays, rx))
+}
+
+/// A frame must come back at the display's full pixel size.
+fn check_size(f: Frame) -> Result<Frame, String> {
+    if (f.px_w(), f.px_h()) == (f.display.px_w, f.display.px_h) {
+        Ok(f)
+    } else {
+        Err(format!(
+            "display {} came back {}x{} px, expected {}x{}",
+            f.display.id,
+            f.px_w(),
+            f.px_h(),
+            f.display.px_w,
+            f.display.px_h
+        ))
+    }
 }
 
 /// Captures every display, all at once, and waits for all of them. Frames come back in display order.

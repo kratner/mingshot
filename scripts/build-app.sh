@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds MingShot.app (release) and, on a Mac with the "MingDesk Dev" certificate (~/Projects/mingdesk/scripts/dev-cert.sh; one self-signed cert serves both apps), signs it
+# Builds MingShot.app (release, universal: Apple silicon and Intel, macOS 10.14+) into build/ and, on a Mac with the
+# "MingDesk Dev" certificate (~/Projects/mingdesk/scripts/dev-cert.sh; one self-signed cert serves both apps), signs it
 # so the Screen Recording permission survives rebuilds.
 #
 #   npm run app            build
@@ -15,9 +16,11 @@ else
   echo "No \"$NAME\" certificate: building unsigned (run sh ~/Projects/mingdesk/scripts/dev-cert.sh once to fix)."
 fi
 
-npx tauri build --bundles app
+npx tauri build --target universal-apple-darwin --bundles app
 
-APP="src-tauri/target/release/bundle/macos/MingShot.app"
+BUILT="src-tauri/target/universal-apple-darwin/release/bundle/macos/MingShot.app"
+APP="build/MingShot.app"
+rm -rf "$APP" && mkdir -p build && cp -R "$BUILT" "$APP"
 if [ "$(uname)" = Darwin ]; then
   codesign -dvv "$APP" 2>&1 | grep -E '^(Identifier|Authority|Signature)=' || true
   if [ "${1:-}" = "--open" ]; then

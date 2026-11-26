@@ -7,7 +7,7 @@
 #   sh scripts/e2e.sh window          one mode
 set -eu
 cd "$(dirname "$0")/.."
-APP=src-tauri/target/release/bundle/macos/MingShot.app/Contents/MacOS/mingshot
+APP=build/MingShot.app/Contents/MacOS/mingshot
 OUT=selftest-out/e2e
 mkdir -p "$OUT"
 status=0

@@ -7,6 +7,22 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // If the app's script can't run (an old WebKit: Mojave ships Safari 12), the capture window says so instead of
+      // staying blank. ES5 so it runs anywhere. Overlays (?overlay=) stay transparent either way.
+      (function () {
+        if (/[?&]overlay=/.test(location.search)) return;
+        function show(text) {
+          var root = document.getElementById('root');
+          if (!root || root.childNodes.length) return;
+          root.innerHTML = '<p style="font: 13px -apple-system, sans-serif; color: #777; padding: 16px">' +
+            "MingShot couldn't start on this Mac: " + String(text).replace(/</g, '&lt;') +
+            '. Updating Safari may fix it.</p>';
+        }
+        window.addEventListener('error', function (e) { show(e.message || 'a script error'); });
+        window.addEventListener('unhandledrejection', function (e) { show(e.reason); });
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

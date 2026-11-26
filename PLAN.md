@@ -219,6 +219,12 @@ All settled; tracked in kratner/planning#1 (private).
 8. **Copy/paste metadata (2026-11-25, planning#29):** copy or paste is **image only by default**. Metadata is
    added by ticking checkboxes (which fields, and how they're included). The ticked set can be retained and
    then repeated with a single click or a keyboard shortcut.
+9. **Oldest macOS: 10.14 Mojave (2026-11-26).** One universal app (Apple silicon and Intel), like MingDesk. The
+   newest capture calls are used where they exist, CoreGraphics' older ones elsewhere (`src-tauri/src/compat.rs`):
+   displays through ScreenCaptureKit on 15.2+, `CGDisplayCreateImage` before; windows through ScreenCaptureKit on
+   26+ (exact shadow), `CGWindowListCreateImage` before. Screen Recording permission from 10.15 (Mojave has none).
+   On the older path the overlay appears once the displays are read rather than instantly. The frontend avoids
+   features Mojave's original WebKit (Safari 12) lacks: pointer events, flex `gap`, `inset`.
 
 ---
 

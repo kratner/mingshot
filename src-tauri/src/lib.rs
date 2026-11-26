@@ -4,6 +4,8 @@
 
 #[cfg(target_os = "macos")]
 pub mod capture;
+#[cfg(target_os = "macos")]
+pub mod compat;
 pub mod log;
 #[cfg(target_os = "macos")]
 mod overlay;
@@ -251,6 +253,12 @@ mod app {
             overlay::order_out_now(win);
             Some(rect)
         })?;
+        let legacy = !crate::compat::modern_displays();
+        if legacy && hidden.is_some() {
+            // CoreGraphics reads whatever is on screen now: give the window server a frame or two to drop the
+            // capture window (ScreenCaptureKit leaves it out because it's marked not shareable; compat.rs).
+            std::thread::sleep(Duration::from_millis(50));
+        }
         if delay_s > 0 {
             std::thread::sleep(Duration::from_secs(delay_s));
             t0 = Instant::now();
@@ -261,7 +269,19 @@ mod app {
         let t1 = Instant::now();
         // Ask for the frames first, then put the overlay up: a little quicker to freeze than the other way round
         // (docs/M0.md), and the overlay is left out of the frames either way.
-        let (displays, rx) = capture::capture_each()?;
+        let (displays, rx) = if legacy {
+            // Before macOS 15.2 (CoreGraphics): read every display first, then put the overlay up. Whether
+            // CoreGraphics leaves out a not-shareable window isn't proven on those systems, so the overlay waits.
+            let frames = capture::capture_all()?;
+            let (tx, rx) = std::sync::mpsc::channel();
+            let displays: Vec<capture::Display> = frames.iter().map(|f| f.display).collect();
+            for f in frames {
+                let _ = tx.send(Ok(f));
+            }
+            (displays, rx)
+        } else {
+            capture::capture_each()?
+        };
         // The overlay goes up at once; it's not shareable, so the capture can't see it.
         let a = app.clone();
         let queued = Instant::now();

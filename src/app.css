@@ -30,19 +30,23 @@ body {
   height: 100%;
   padding: 14px 16px 12px;
   box-sizing: border-box;
-  gap: 10px;
+}
+/* Spacing with margins, not flex `gap`: Mojave's original WebKit (Safari 12) has no flex gap. */
+.capture-window > * + * {
+  margin-top: 10px;
 }
 
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
+}
+.toolbar > * + * {
+  margin-left: 12px;
 }
 
 button.new {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
   height: 36px;
   padding: 0 18px;
   border: 0;
@@ -65,16 +69,17 @@ button.new:disabled {
 button.new .plus {
   font-size: 18px;
   line-height: 1;
+  margin-right: 6px;
 }
 
 .picker {
   display: flex;
   flex-direction: column;
-  gap: 2px;
   font-size: 11px;
   color: var(--fo-muted);
 }
 .picker select {
+  margin-top: 2px;
   font: 13px var(--fo-font-text);
   color: var(--fo-text);
   background: var(--fo-surface);
@@ -83,10 +88,12 @@ button.new .plus {
   padding: 3px 6px;
 }
 
+.check input {
+  margin: 0 5px 0 0;
+}
 .check {
   display: flex;
   align-items: center;
-  gap: 5px;
   align-self: flex-end;
   padding-bottom: 4px;
   font-size: 12px;
@@ -131,7 +138,10 @@ html.is-overlay body {
 
 .overlay {
   position: fixed;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   cursor: crosshair;
   overflow: hidden;
   -webkit-user-drag: none;
@@ -139,7 +149,10 @@ html.is-overlay body {
 }
 .overlay .dim {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   background: rgba(0, 0, 0, 0.18);
 }
 /* Outside the selection is dimmed; the selected pixels show as is. */

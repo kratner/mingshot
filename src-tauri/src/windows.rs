@@ -134,6 +134,10 @@ unsafe impl Send for Image {}
 /// `ignoreShadows` gives exactly the Mac's own window screenshot both ways (`screencapture -l`, `-o -l`); the older
 /// `captureImageWithFilter` can't size the shadow (docs/M1.md).
 pub fn capture(window_id: u32, shadow: bool) -> Result<CFRetained<CGImage>, String> {
+    if !crate::compat::modern_windows() {
+        // Before macOS 26: CoreGraphics' window image (compat.rs).
+        return crate::compat::window_image(window_id, shadow);
+    }
     use objc2_screen_capture_kit::{SCScreenshotConfiguration, SCScreenshotOutput};
     let content = shareable_content()?;
     // SAFETY: property reads on a retained SCShareableContent.

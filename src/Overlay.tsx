@@ -86,7 +86,8 @@ export default function Overlay({ display }: { display: number }) {
   // Bench mode paints the overlay opaque magenta so the bench can prove no capture ever contains it.
   const [bench, setBench] = useState(false);
   // The drag is followed on the window, not on an element: the element under the pointer changes as the selection
-  // is drawn (the dimming gives way to the selection box), and a pointer capture set on it would go with it.
+  // is drawn (the dimming gives way to the selection box). Mouse events, not pointer events: Mojave's original
+  // WebKit (Safari 12) has no pointer events.
   const dragFrom = useRef<Pt | null>(null);
 
   const reset = () => {
@@ -136,12 +137,12 @@ export default function Overlay({ display }: { display: number }) {
       }
     };
     const onBlur = () => reset();
-    const move = (e: PointerEvent) => {
+    const move = (e: MouseEvent) => {
       const p = { x: e.clientX, y: e.clientY };
       setPointer(p);
       if (dragFrom.current) setEnd(p);
     };
-    const up = (e: PointerEvent) => {
+    const up = (e: MouseEvent) => {
       if (e.button === 0) finishDrag({ x: e.clientX, y: e.clientY });
     };
     // End-to-end test mode (scripts/e2e.swift, MINGSHOT_E2E_SELECT): the overlay under the pointer is told to make
@@ -154,20 +155,20 @@ export default function Overlay({ display }: { display: number }) {
     });
     window.addEventListener('keydown', onKey);
     window.addEventListener('blur', onBlur);
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
     return () => {
       offTargets.then((f) => f());
       offThawed.then((f) => f());
       offE2e.then((f) => f());
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('blur', onBlur);
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
     };
   }, []);
 
-  const onDown = (e: React.PointerEvent) => {
+  const onDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     const p = { x: e.clientX, y: e.clientY };
     dragFrom.current = p;
@@ -181,7 +182,7 @@ export default function Overlay({ display }: { display: number }) {
   const hover = sel ? null : hoverAt(targets, start ?? pointer);
   const dpr = devicePixelRatio;
   return (
-    <div className={bench ? 'overlay bench-overlay' : 'overlay'} onPointerDown={onDown}>
+    <div className={bench ? 'overlay bench-overlay' : 'overlay'} onMouseDown={onDown}>
       {sel ? (
         <>
           <Shades r={sel} />
