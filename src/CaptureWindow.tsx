@@ -253,12 +253,20 @@ export default function CaptureWindow() {
             onError={(message) => setStatus({ kind: 'error', message })}
           />
         )}
-        {status.kind === 'copied' && meta?.source && (
+        {status.kind === 'copied' && meta?.source ? (
           <SourceLine
             meta={meta}
             axAllowed={axAllowed}
             onAllow={() => invoke<boolean>('accessibility', { request: true }).then(setAxAllowed)}
           />
+        ) : (
+          status.kind !== 'copied' &&
+          permitted !== false && (
+            <DetailsLine
+              axAllowed={axAllowed}
+              onAllow={() => invoke<boolean>('accessibility', { request: true }).then(setAxAllowed)}
+            />
+          )
         )}
       </div>
     </div>
@@ -302,19 +310,29 @@ const HINTS: Record<Mode, string> = {
 /// Where the capture came from: app and window title, and the page or file when MingShot may ask (Accessibility).
 function SourceLine({ meta, axAllowed, onAllow }: { meta: Meta; axAllowed: boolean; onAllow: () => void }) {
   const src = meta.source!;
-  // Remember that the permission was missing for this capture, so granting it says so instead of the link just
-  // disappearing (Keith, 2026-11-26).
+  // Remember that the permission was missing for this capture, so granting it says what changed instead of the
+  // link just disappearing (Keith, 2026-11-26).
   const [askedFor, setAskedFor] = useState(!axAllowed);
   useEffect(() => {
     if (!axAllowed) setAskedFor(true);
   }, [axAllowed]);
-  const where = src.url ?? (src.file_path ? fileName(src.file_path) : null);
   return (
     <div className="status-sub source" title={[src.app, src.window_title, src.url ?? src.file_path].filter(Boolean).join('\n')}>
       from <strong>{src.app}</strong>
       {src.window_title && <> · {src.window_title}</>}
-      {where && <> · {where}</>}
-      {!where && !axAllowed && (
+      {src.url && (
+        <>
+          {' '}
+          · <span className="detail-key">page</span> {src.url}
+        </>
+      )}
+      {!src.url && src.file_path && (
+        <>
+          {' '}
+          · <span className="detail-key">file</span> {fileName(src.file_path)}
+        </>
+      )}
+      {!src.url && !src.file_path && !axAllowed && (
         <>
           {' '}
           <button className="link quiet" onClick={onAllow} title="Needs Accessibility; macOS will ask">
@@ -322,8 +340,31 @@ function SourceLine({ meta, axAllowed, onAllow }: { meta: Meta; axAllowed: boole
           </button>
         </>
       )}
-      {!where && axAllowed && askedFor && (
-        <span className="ax-on"> · Web addresses and file paths: on, from the next capture</span>
+      {!src.url && !src.file_path && axAllowed && askedFor && (
+        <span className="ax-on"> · Now on: browser pages and documents will include their address or file</span>
+      )}
+    </div>
+  );
+}
+
+/// What MingShot records with each capture, and whether web addresses and file paths are on; shown when there's no
+/// capture to describe, so the setting is always findable (Keith, 2026-11-26).
+function DetailsLine({ axAllowed, onAllow }: { axAllowed: boolean; onAllow: () => void }) {
+  return (
+    <div
+      className="status-sub details"
+      title="Recorded with every capture and kept in a .mingshot file beside each saved one. The clipboard only ever gets the image."
+    >
+      Capture details: app, window title and time ·{' '}
+      {axAllowed ? (
+        <span className="ax-on">web addresses and file paths on</span>
+      ) : (
+        <>
+          web addresses and file paths off{' '}
+          <button className="link quiet" onClick={onAllow} title="Needs Accessibility; macOS will ask">
+            Turn on…
+          </button>
+        </>
       )}
     </div>
   );

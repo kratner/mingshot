@@ -182,6 +182,13 @@ button.new {
   font-weight: 600;
   color: var(--fo-text-2);
 }
+.detail-key {
+  font: 600 10px var(--fo-font-text);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fo-muted);
+  margin-right: 3px;
+}
 .ax-on {
   color: var(--fo-success);
 }
