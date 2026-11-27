@@ -8,6 +8,8 @@ pub mod capture;
 pub mod compat;
 pub mod log;
 #[cfg(target_os = "macos")]
+pub mod output;
+#[cfg(target_os = "macos")]
 mod overlay;
 #[cfg(target_os = "macos")]
 pub mod windows;
@@ -69,12 +71,39 @@ mod app {
         mode: Mode,
         /// Window mode: include the window's shadow.
         shadow: bool,
+        /// Clipboard, the MingShot folder, or both.
+        after: crate::output::After,
     }
 
     static SETTINGS: Mutex<Settings> = Mutex::new(Settings {
         mode: Mode::Region,
         shadow: true,
+        after: crate::output::After::Copy,
     });
+
+    /// The last capture's PNG and where it went, for the status line's Copy / Save / Show in Finder / Open.
+    struct Last {
+        png: Vec<u8>,
+        copied: bool,
+        saved: Option<std::path::PathBuf>,
+    }
+
+    static LAST: Mutex<Option<Last>> = Mutex::new(None);
+
+    /// Where the last capture is now (sent back after each action).
+    #[derive(Serialize, Clone)]
+    pub struct Delivered {
+        copied: bool,
+        /// The saved file's full path, if it's been saved.
+        saved: Option<String>,
+    }
+
+    fn delivered(l: &Last) -> Delivered {
+        Delivered {
+            copied: l.copied,
+            saved: l.saved.as_ref().map(|p| p.display().to_string()),
+        }
+    }
 
     /// A window the overlay can highlight, in points relative to the overlay's display.
     #[derive(Serialize, Clone)]
@@ -436,6 +465,8 @@ mod app {
         region: Option<LastRegion>,
         /// This was Repeat: the last region again, no overlay.
         repeated: bool,
+        /// Where it went: the clipboard and/or a file.
+        delivered: Delivered,
     }
 
     /// The last dragged region: its display and the rectangle in points on it (M1, "repeat last region").
@@ -499,7 +530,28 @@ mod app {
             }
         };
         let bytes = png.len();
-        on_main(app, move |_| capture::copy_png(&png))?;
+        let after = SETTINGS.lock().unwrap().after;
+        let saved = if after.saves() {
+            match crate::output::save(&png) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    log::event(&format!("save failed: {e}"));
+                    show_main(app);
+                    return Err(e);
+                }
+            }
+        } else {
+            None
+        };
+        if after.copies() {
+            let copy = png.clone();
+            on_main(app, move |_| capture::copy_png(&copy))?;
+        }
+        let last = Last {
+            png,
+            copied: after.copies(),
+            saved,
+        };
         let captured = Captured {
             width,
             height,
@@ -508,13 +560,17 @@ mod app {
             timings,
             region,
             repeated,
+            delivered: delivered(&last),
         };
+        *LAST.lock().unwrap() = Some(last);
         if let Some(r) = region {
             *LAST_REGION.lock().unwrap() = Some(r);
         }
         log::event(&format!(
-            "copied {what} {width}x{height} px ({bytes} bytes) in {} ms",
-            captured.copy_ms
+            "{what} {width}x{height} px ({bytes} bytes) in {} ms: copied {}, saved {}",
+            captured.copy_ms,
+            captured.delivered.copied,
+            captured.delivered.saved.is_some()
         ));
         show_main(app);
         let _ = app.emit_to("main", "captured", captured.clone());
@@ -672,15 +728,56 @@ mod app {
         }
     }
 
+    /// Status-line actions on the last capture: copy it, save it, show it in Finder, open it (saving first).
+    #[tauri::command]
+    async fn last_capture(app: AppHandle, action: String) -> Result<Delivered, String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut guard = LAST.lock().unwrap();
+            let last = guard.as_mut().ok_or("nothing captured yet")?;
+            match action.as_str() {
+                "copy" => {
+                    let png = last.png.clone();
+                    on_main(&app, move |_| capture::copy_png(&png))?;
+                    last.copied = true;
+                }
+                "save" | "open" | "reveal" => {
+                    if last.saved.is_none() {
+                        last.saved = Some(crate::output::save(&last.png)?);
+                    }
+                    let path = last.saved.clone().unwrap();
+                    match action.as_str() {
+                        "open" => crate::output::open(&path)?,
+                        "reveal" => crate::output::reveal(&path)?,
+                        _ => {}
+                    }
+                }
+                other => return Err(format!("unknown action {other}")),
+            }
+            log::event(&format!("last capture: {action}"));
+            Ok(delivered(last))
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
     /// The capture window's mode picker and shadow setting.
     #[tauri::command]
-    fn set_mode(mode: Mode, shadow: bool) {
+    fn set_mode(mode: Mode, shadow: bool, after: Option<crate::output::After>) {
         // End-to-end test runs fix the mode (scripts/e2e.sh); the capture window mustn't change it.
         let mode = std::env::var("MINGSHOT_E2E_MODE")
             .ok()
             .and_then(|m| serde_json::from_value(serde_json::Value::String(m)).ok())
             .unwrap_or(mode);
-        *SETTINGS.lock().unwrap() = Settings { mode, shadow };
+        let after = std::env::var("MINGSHOT_E2E_AFTER")
+            .ok()
+            .and_then(|a| serde_json::from_value(serde_json::Value::String(a)).ok())
+            .or(after)
+            .unwrap_or(crate::output::After::Copy);
+        *SETTINGS.lock().unwrap() = Settings {
+            mode,
+            shadow,
+            after,
+        };
     }
 
     #[tauri::command]
@@ -877,6 +974,7 @@ mod app {
                 finish_display_capture,
                 set_mode,
                 repeat_region,
+                last_capture,
                 set_last_region,
                 loupe,
                 cancel_capture,

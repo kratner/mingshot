@@ -24,7 +24,11 @@ type Captured = {
   region: Region | null;
   /** This was Repeat. */
   repeated: boolean;
+  /** Where it went. */
+  delivered: Delivered;
 };
+type Delivered = { copied: boolean; saved: string | null };
+type After = 'copy' | 'save' | 'both';
 
 type Mode = 'region' | 'window' | 'display';
 
@@ -55,6 +59,7 @@ export default function CaptureWindow() {
   const [delay, setDelay] = useState(() => Number(stored('delay') ?? 0));
   const [mode, setMode] = useState<Mode>(() => (stored('mode') as Mode) ?? 'region');
   const [shadow, setShadow] = useState(() => stored('shadow') !== 'false');
+  const [after, setAfter] = useState<After>(() => (stored('after') as After) ?? 'copy');
   const [status, setStatus] = useState<Status>(demoStatus);
   const [bench, setBench] = useState(false);
   // Click-to-overlay time as the page sees it: from the click to start_capture returning, which happens once the
@@ -66,8 +71,9 @@ export default function CaptureWindow() {
     store('mode', mode);
     store('shadow', String(shadow));
     store('delay', String(delay));
-    invoke('set_mode', { mode, shadow });
-  }, [mode, shadow, delay]);
+    store('after', after);
+    invoke('set_mode', { mode, shadow, after });
+  }, [mode, shadow, delay, after]);
 
   // The last dragged region, for Repeat (⌃⇧3); remembered between launches.
   const [lastRegion, setLastRegion] = useState<Region | null>(() => {
@@ -173,6 +179,18 @@ export default function CaptureWindow() {
             ]}
           />
         </div>
+        <div className="group">
+          <span className="group-label">After capture</span>
+          <Segmented
+            value={after}
+            onChange={setAfter}
+            options={[
+              ['copy', 'Copy', 'Put it on the clipboard'],
+              ['save', 'Save', 'Save a PNG in Pictures › MingShot'],
+              ['both', 'Both', 'Copy and save'],
+            ]}
+          />
+        </div>
         {mode === 'window' && (
           <div className="group">
             <span className="group-label">Shadow</span>
@@ -196,7 +214,14 @@ export default function CaptureWindow() {
             </button>
           </div>
         ) : (
-          <StatusLine status={status} mode={mode} />
+          <StatusLine
+            status={status}
+            mode={mode}
+            onDelivered={(d) =>
+              setStatus((st) => (st.kind === 'copied' ? { ...st, captured: { ...st.captured, delivered: d } } : st))
+            }
+            onError={(message) => setStatus({ kind: 'error', message })}
+          />
         )}
       </div>
     </div>
@@ -237,7 +262,22 @@ const HINTS: Record<Mode, string> = {
   display: 'New or ⌃⇧2, then click a display (or drag a region). Esc cancels.',
 };
 
-function StatusLine({ status, mode }: { status: Status; mode: Mode }) {
+/// The file's name, from its full path.
+const fileName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
+
+function StatusLine({
+  status,
+  mode,
+  onDelivered,
+  onError,
+}: {
+  status: Status;
+  mode: Mode;
+  onDelivered: (d: Delivered) => void;
+  onError: (message: string) => void;
+}) {
+  const act = (action: 'copy' | 'save' | 'reveal' | 'open') =>
+    invoke<Delivered>('last_capture', { action }).then(onDelivered, (e) => onError(String(e)));
   switch (status.kind) {
     case 'idle':
       return <div className="status-main muted">{HINTS[mode]}</div>;
@@ -254,16 +294,52 @@ function StatusLine({ status, mode }: { status: Status; mode: Mode }) {
       const { captured: c } = status;
       const t = c.timings;
       const title = `Overlay up ${t.ui_ms} ms · your display frozen ${t.frozen_ms} ms · all ${t.displays} displays ${t.all_ms} ms · copied ${c.copy_ms} ms after the click`;
+      const d = c.delivered;
+      const size = (
+        <strong>
+          {c.width} × {c.height}
+        </strong>
+      );
       return (
         <>
           <div className="status-main">
-            <span className="tick">✓</span> Copied <strong>{c.width} × {c.height}</strong> px to the clipboard
+            <span className="tick">✓</span>{' '}
+            {d.copied && d.saved ? (
+              <>Copied and saved {size} px</>
+            ) : d.saved ? (
+              <>Saved {size} px to Pictures › MingShot</>
+            ) : (
+              <>Copied {size} px to the clipboard</>
+            )}
+            <span className="actions">
+              {!d.copied && (
+                <button className="link" onClick={() => act('copy')}>
+                  Copy
+                </button>
+              )}
+              {!d.saved && (
+                <button className="link" onClick={() => act('save')} title="Save a PNG in Pictures › MingShot">
+                  Save
+                </button>
+              )}
+              {d.saved && (
+                <button className="link" onClick={() => act('reveal')} title={d.saved}>
+                  Show in Finder
+                </button>
+              )}
+              <button className="link" onClick={() => act('open')} title="Open in your image app (saves it first)">
+                Open
+              </button>
+            </span>
           </div>
           {c.repeated ? (
-            <div className="status-sub">Same region as last time · {Math.round(c.copy_ms)} ms</div>
+            <div className="status-sub">
+              Same region as last time{d.saved ? ` · ${fileName(d.saved)}` : ''}
+            </div>
           ) : (
             <div className="status-sub timings" title={title}>
-              Overlay {Math.round(t.ui_ms)} ms · screen frozen {Math.round(t.frozen_ms)} ms
+              {d.saved ? `${fileName(d.saved)} · ` : ''}overlay {Math.round(t.ui_ms)} ms · frozen{' '}
+              {Math.round(t.frozen_ms)} ms
             </div>
           )}
         </>
@@ -281,7 +357,16 @@ function demoStatus(): Status {
   return {
     kind: 'copied',
     clickMs: null,
-    captured: { width: 876, height: 666, bytes: 0, copy_ms: 9, timings, region: null, repeated: false },
+    captured: {
+      width: 876,
+      height: 666,
+      bytes: 0,
+      copy_ms: 9,
+      timings,
+      region: null,
+      repeated: false,
+      delivered: { copied: true, saved: '/Users/you/Pictures/MingShot/MingShot 2026-11-26 at 17.42.05.png' },
+    },
   };
 }
 

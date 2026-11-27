@@ -154,6 +154,12 @@ button.new {
   font-size: 13px;
   line-height: 18px;
 }
+.status-main .actions {
+  margin-left: 14px;
+}
+.status-main .actions .link + .link {
+  margin-left: 12px;
+}
 .status-main strong {
   font-weight: 600;
 }

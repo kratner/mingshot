@@ -11,6 +11,7 @@
 // be identical. `screencapture -R` (the ⌘⇧4 path) is reported for information: it differs from the screen itself
 // by a few levels over glass and blur materials. Also checks that Esc cancels and leaves the clipboard alone.
 //
+// Save: After capture = Save puts a region in ~/Pictures/MingShot (not the clipboard), identical to the screen.
 // Repeat: after the regions, ⌃⇧3 must copy the last region again, identical to the screen.
 // Window: the pointer goes to an uncovered spot on up to three other apps' windows and MingShot clicks there
 // (MINGSHOT_E2E_SELECT=pointer); the clipboard must equal `screencapture -l<id>` (with shadow), alpha included.
@@ -155,6 +156,45 @@ case "window":
               after: read(after).flatMap { pixels($0) }, alpha: true, ours: "\(out)/e2e-win\(n)-mingshot.png")
         sleepMs(400)
     }
+
+case "save":
+    // After capture = Save (MINGSHOT_E2E_AFTER=save): a region goes to ~/Pictures/MingShot, not the clipboard. The
+    // file must equal the screen; the test deletes only the file it made.
+    let folder = (NSHomeDirectory() as NSString).appendingPathComponent("Pictures/MingShot")
+    let existing = Set((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? [])
+    let sel = CGRect(x: 140, y: 180, width: 301, height: 187)
+    let id = displayIDs[0]
+    let b = CGDisplayBounds(id)
+    let scale = Double(CGDisplayCopyDisplayMode(id)?.pixelWidth ?? Int(b.width)) / b.width
+    let crop = CGRect(x: sel.minX * scale, y: sel.minY * scale, width: sel.width * scale, height: sel.height * scale)
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString("untouched", forType: .string)
+    let before = "\(out)/e2e-save-before-D.png", after = "\(out)/e2e-save-after-D.png"
+    _ = screencapture(["-D", "1"], before)
+    move(CGPoint(x: b.minX + sel.minX, y: b.minY + sel.minY)); sleepMs(150)
+    hotkey()
+    var made: String? = nil
+    for _ in 0..<60 {
+        let now = Set((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? [])
+        if let f = now.subtracting(existing).first(where: { $0.hasSuffix(".png") }) { made = f; break }
+        sleepMs(50)
+    }
+    move(CGPoint(x: b.minX + sel.maxX + 200, y: b.minY + sel.maxY + 120)); sleepMs(300)
+    _ = screencapture(["-D", "1"], after)
+    if let f = made {
+        let path = (folder as NSString).appendingPathComponent(f)
+        let named = f.hasPrefix("MingShot ") && f.contains(" at ")
+        print(named ? "PASS saved as \"\(f)\"" : "FAIL unexpected file name \"\(f)\"")
+        if !named { failures += 1 }
+        check("saved region on display \(id)", read(path), before: read(before).flatMap { pixels($0, crop: crop) },
+              after: read(after).flatMap { pixels($0, crop: crop) }, alpha: false, ours: "\(out)/e2e-save-mingshot.png")
+        try? FileManager.default.removeItem(atPath: path)
+    } else {
+        print("FAIL nothing saved in \(folder)"); failures += 1
+    }
+    let clip = NSPasteboard.general.string(forType: .string) == "untouched" && clipboardPNG() == nil
+    print(clip ? "PASS Save alone leaves the clipboard alone" : "FAIL Save changed the clipboard")
+    if !clip { failures += 1 }
 
 case "display":
     for (n, id) in displayIDs.enumerated() {
