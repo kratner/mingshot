@@ -13,7 +13,18 @@ type Timings = {
   displays: number;
   delay_s: number;
 };
-type Captured = { width: number; height: number; bytes: number; copy_ms: number; timings: Timings };
+type Region = { display: number; rect: { x: number; y: number; w: number; h: number } };
+type Captured = {
+  width: number;
+  height: number;
+  bytes: number;
+  copy_ms: number;
+  timings: Timings;
+  /** A dragged region (what Repeat takes again); null for a window or display. */
+  region: Region | null;
+  /** This was Repeat. */
+  repeated: boolean;
+};
 
 type Mode = 'region' | 'window' | 'display';
 
@@ -58,11 +69,26 @@ export default function CaptureWindow() {
     invoke('set_mode', { mode, shadow });
   }, [mode, shadow, delay]);
 
+  // The last dragged region, for Repeat (⌃⇧3); remembered between launches.
+  const [lastRegion, setLastRegion] = useState<Region | null>(() => {
+    try {
+      return JSON.parse(stored('lastRegion') ?? 'null');
+    } catch {
+      return null;
+    }
+  });
+
   useEffect(() => {
     invoke<boolean>('permission').then(setPermitted);
-    const offCaptured = listen<Captured>('captured', (e) =>
-      setStatus({ kind: 'copied', captured: e.payload, clickMs: clickMs.current }),
-    );
+    invoke('set_last_region', { region: lastRegion }).catch(() => {});
+    const offCaptured = listen<Captured>('captured', (e) => {
+      setStatus({ kind: 'copied', captured: e.payload, clickMs: clickMs.current });
+      if (e.payload.region) {
+        setLastRegion(e.payload.region);
+        store('lastRegion', JSON.stringify(e.payload.region));
+      }
+    });
+    const offError = listen<string>('capture-error', (e) => setStatus({ kind: 'error', message: e.payload }));
     const offCancelled = listen('cancelled', () => setStatus({ kind: 'cancelled' }));
     // Re-check the permission whenever the window comes back (after a trip to System Settings).
     const onFocus = () => invoke<boolean>('permission').then(setPermitted);
@@ -76,6 +102,7 @@ export default function CaptureWindow() {
     return () => {
       offCaptured.then((f) => f());
       offCancelled.then((f) => f());
+      offError.then((f) => f());
       window.removeEventListener('focus', onFocus);
     };
   }, []);
@@ -91,6 +118,14 @@ export default function CaptureWindow() {
     }
   }
 
+  async function onRepeat() {
+    try {
+      await invoke('repeat_region');
+    } catch (e) {
+      setStatus({ kind: 'error', message: String(e) });
+    }
+  }
+
   if (bench) {
     return <div className="bench">MingShot bench: this window must never appear in a capture.</div>;
   }
@@ -100,6 +135,18 @@ export default function CaptureWindow() {
       <div className="toolbar">
         <button className="new" onClick={onNew} disabled={permitted === false} title="New capture (⌃⇧2)">
           <span className="plus">+</span>New
+        </button>
+        <button
+          className="repeat"
+          onClick={onRepeat}
+          disabled={permitted === false || !lastRegion}
+          title={
+            lastRegion
+              ? `Take the last region again: ${Math.round(lastRegion.rect.w)} × ${Math.round(lastRegion.rect.h)} pt (⌃⇧3)`
+              : 'Repeat the last region (⌃⇧3): drag a region first'
+          }
+        >
+          ↻ Repeat
         </button>
         <div className="group">
           <span className="group-label">Mode</span>
@@ -185,7 +232,7 @@ function Segmented<T extends string | number | boolean>({
 }
 
 const HINTS: Record<Mode, string> = {
-  region: 'New or ⌃⇧2, then drag a region. Esc cancels.',
+  region: 'New or ⌃⇧2, then drag a region. Esc cancels. Repeat (⌃⇧3) takes the last region again.',
   window: 'New or ⌃⇧2, then click a window (or drag a region). Esc cancels.',
   display: 'New or ⌃⇧2, then click a display (or drag a region). Esc cancels.',
 };
@@ -212,9 +259,13 @@ function StatusLine({ status, mode }: { status: Status; mode: Mode }) {
           <div className="status-main">
             <span className="tick">✓</span> Copied <strong>{c.width} × {c.height}</strong> px to the clipboard
           </div>
-          <div className="status-sub timings" title={title}>
-            Overlay {Math.round(t.ui_ms)} ms · screen frozen {Math.round(t.frozen_ms)} ms
-          </div>
+          {c.repeated ? (
+            <div className="status-sub">Same region as last time · {Math.round(c.copy_ms)} ms</div>
+          ) : (
+            <div className="status-sub timings" title={title}>
+              Overlay {Math.round(t.ui_ms)} ms · screen frozen {Math.round(t.frozen_ms)} ms
+            </div>
+          )}
         </>
       );
     }
@@ -227,7 +278,11 @@ function demoStatus(): Status {
   if (demo === 'cancelled') return { kind: 'cancelled' };
   if (demo !== 'copied') return { kind: 'idle' };
   const timings = { ui_ms: 18.4, frozen_ms: 62.3, all_ms: 120.1, capture_ms: 107, displays: 3, delay_s: 0 };
-  return { kind: 'copied', clickMs: null, captured: { width: 876, height: 666, bytes: 0, copy_ms: 9, timings } };
+  return {
+    kind: 'copied',
+    clickMs: null,
+    captured: { width: 876, height: 666, bytes: 0, copy_ms: 9, timings, region: null, repeated: false },
+  };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

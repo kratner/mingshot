@@ -10,7 +10,7 @@
 //! as of macOS 27, so they're looked up by name at run time rather than linked. `MINGSHOT_LEGACY=1` forces the old
 //! paths on a new Mac, so the self-test can check them against the Mac's own screenshots (docs/M1.md).
 
-use std::ffi::{c_void, CString};
+use std::ffi::{CString, c_void};
 use std::ptr::NonNull;
 
 use objc2_core_foundation::{CFRetained, CGRect};
@@ -19,7 +19,11 @@ use objc2_foundation::{NSOperatingSystemVersion, NSProcessInfo};
 
 /// Whether this Mac runs macOS `major.minor` or later.
 pub fn os_at_least(major: isize, minor: isize) -> bool {
-    let v = NSOperatingSystemVersion { majorVersion: major, minorVersion: minor, patchVersion: 0 };
+    let v = NSOperatingSystemVersion {
+        majorVersion: major,
+        minorVersion: minor,
+        patchVersion: 0,
+    };
     NSProcessInfo::processInfo().isOperatingSystemAtLeastVersion(v)
 }
 
@@ -54,7 +58,9 @@ fn symbol(name: &str) -> Option<NonNull<c_void>> {
 pub fn has_permission() -> bool {
     match symbol("CGPreflightScreenCaptureAccess") {
         // SAFETY: `bool CGPreflightScreenCaptureAccess(void)` (macOS 10.15+).
-        Some(f) => unsafe { std::mem::transmute::<*mut c_void, extern "C" fn() -> bool>(f.as_ptr())() },
+        Some(f) => unsafe {
+            std::mem::transmute::<*mut c_void, extern "C" fn() -> bool>(f.as_ptr())()
+        },
         None => true,
     }
 }
@@ -63,7 +69,9 @@ pub fn has_permission() -> bool {
 pub fn request_permission() -> bool {
     match symbol("CGRequestScreenCaptureAccess") {
         // SAFETY: `bool CGRequestScreenCaptureAccess(void)` (macOS 10.15+).
-        Some(f) => unsafe { std::mem::transmute::<*mut c_void, extern "C" fn() -> bool>(f.as_ptr())() },
+        Some(f) => unsafe {
+            std::mem::transmute::<*mut c_void, extern "C" fn() -> bool>(f.as_ptr())()
+        },
         None => true,
     }
 }
@@ -90,11 +98,13 @@ pub fn window_image(window: u32, shadow: bool) -> Result<CFRetained<CGImage>, St
     const BEST_RESOLUTION: u32 = 1 << 3; // kCGWindowImageBestResolution
     let f = symbol("CGWindowListCreateImage").ok_or("this macOS has no CGWindowListCreateImage")?;
     // SAFETY: `CGImageRef CGWindowListCreateImage(CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption)`.
-    let f: extern "C" fn(CGRect, u32, u32, u32) -> *mut CGImage = unsafe { std::mem::transmute(f.as_ptr()) };
+    let f: extern "C" fn(CGRect, u32, u32, u32) -> *mut CGImage =
+        unsafe { std::mem::transmute(f.as_ptr()) };
     let null_rect = CGRect::new(
         objc2_core_foundation::CGPoint::new(f64::INFINITY, f64::INFINITY),
         objc2_core_foundation::CGSize::new(0.0, 0.0),
     ); // CGRectNull: the window's own bounds
     let options = BEST_RESOLUTION | if shadow { 0 } else { IGNORE_FRAMING };
-    owned(f(null_rect, INCLUDING_WINDOW, window, options)).ok_or_else(|| "that window couldn't be read".to_string())
+    owned(f(null_rect, INCLUDING_WINDOW, window, options))
+        .ok_or_else(|| "that window couldn't be read".to_string())
 }

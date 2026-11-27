@@ -326,8 +326,15 @@ impl Frame {
         let cf: &objc2_core_foundation::CFData = &data;
         let len = objc2_core_foundation::CFData::length(cf) as usize;
         // SAFETY: CFData's bytes are valid for `len` bytes while `data` lives; copied out here.
-        let bytes = unsafe { std::slice::from_raw_parts(objc2_core_foundation::CFData::byte_ptr(cf), len) }.to_vec();
-        Some(Pixels { bytes, row: CGImage::bytes_per_row(Some(&self.image)), w: self.px_w(), h: self.px_h() })
+        let bytes =
+            unsafe { std::slice::from_raw_parts(objc2_core_foundation::CFData::byte_ptr(cf), len) }
+                .to_vec();
+        Some(Pixels {
+            bytes,
+            row: CGImage::bytes_per_row(Some(&self.image)),
+            w: self.px_w(),
+            h: self.px_h(),
+        })
     }
 }
 
@@ -389,7 +396,12 @@ mod tests {
                 bytes.extend_from_slice(&[x, y, 9, 255]);
             }
         }
-        let p = Pixels { bytes, row: 12, w: 3, h: 2 };
+        let p = Pixels {
+            bytes,
+            row: 12,
+            w: 3,
+            h: 2,
+        };
         let patch = p.patch(0, 0, 3); // centred on the top-left corner
         let px = |i: usize, j: usize| &patch[(j * 3 + i) * 4..(j * 3 + i) * 4 + 4];
         assert_eq!(px(0, 0), &[0, 0, 0, 0]); // outside: transparent

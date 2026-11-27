@@ -245,23 +245,8 @@ mod app {
         }
 
         // Hide the capture window (and leave it out of captures) before anything else.
-        let a = app.clone();
-        let hidden = on_main(app, move |mtm| {
-            let main = a.get_webview_window("main")?;
-            let win = ns_window(&main)?;
-            if !win.isVisible() {
-                return None;
-            }
-            let rect = overlay::cg_frame(mtm, win);
-            overlay::order_out_now(win);
-            Some(rect)
-        })?;
+        let hidden = hide_main_for_capture(app)?;
         let legacy = !crate::compat::modern_displays();
-        if legacy && hidden.is_some() {
-            // CoreGraphics reads whatever is on screen now: give the window server a frame or two to drop the
-            // capture window (ScreenCaptureKit leaves it out because it's marked not shareable; compat.rs).
-            std::thread::sleep(Duration::from_millis(50));
-        }
         if delay_s > 0 {
             std::thread::sleep(Duration::from_secs(delay_s));
             t0 = Instant::now();
@@ -394,6 +379,27 @@ mod app {
         Ok(timings)
     }
 
+    /// Takes the capture window off screen and out of captures; returns where it was (global points) if it was up.
+    fn hide_main_for_capture(app: &AppHandle) -> Result<Option<Rect>, String> {
+        let a = app.clone();
+        let hidden = on_main(app, move |mtm| {
+            let main = a.get_webview_window("main")?;
+            let win = ns_window(&main)?;
+            if !win.isVisible() {
+                return None;
+            }
+            let rect = overlay::cg_frame(mtm, win);
+            overlay::order_out_now(win);
+            Some(rect)
+        })?;
+        if !crate::compat::modern_displays() && hidden.is_some() {
+            // CoreGraphics reads whatever is on screen now: give the window server a frame or two to drop the
+            // capture window (ScreenCaptureKit leaves it out because it's marked not shareable; compat.rs).
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Ok(hidden)
+    }
+
     fn hide_overlays(app: &AppHandle) {
         for w in overlay_windows(app) {
             let _ = w.emit_to(w.label(), "thawed", ());
@@ -426,7 +432,20 @@ mod app {
         bytes: usize,
         copy_ms: f64,
         timings: Timings,
+        /// A dragged region (for Repeat); none for a window or display.
+        region: Option<LastRegion>,
+        /// This was Repeat: the last region again, no overlay.
+        repeated: bool,
     }
+
+    /// The last dragged region: its display and the rectangle in points on it (M1, "repeat last region").
+    #[derive(Serialize, serde::Deserialize, Clone, Copy, Debug)]
+    pub struct LastRegion {
+        display: u32,
+        rect: Rect,
+    }
+
+    static LAST_REGION: Mutex<Option<LastRegion>> = Mutex::new(None);
 
     /// Waits for a display's frozen frame (a quick drag can beat the capture), up to 5 s.
     fn frame_for(app: &AppHandle, display: u32) -> Result<Arc<Frame>, String> {
@@ -468,6 +487,8 @@ mod app {
         t: Instant,
         timings: Timings,
         what: &str,
+        region: Option<LastRegion>,
+        repeated: bool,
     ) -> Result<Captured, String> {
         let (png, width, height) = match result {
             Ok(r) => r,
@@ -485,7 +506,12 @@ mod app {
             bytes,
             copy_ms: ms(t),
             timings,
+            region,
+            repeated,
         };
+        if let Some(r) = region {
+            *LAST_REGION.lock().unwrap() = Some(r);
+        }
         log::event(&format!(
             "copied {what} {width}x{height} px ({bytes} bytes) in {} ms",
             captured.copy_ms
@@ -500,7 +526,15 @@ mod app {
         let t = Instant::now();
         let frame = frame_for(app, display)?;
         let timings = end_session(app);
-        deliver(app, capture::crop_png(&frame, sel), t, timings, "region")
+        deliver(
+            app,
+            capture::crop_png(&frame, sel),
+            t,
+            timings,
+            "region",
+            Some(LastRegion { display, rect: sel }),
+            false,
+        )
     }
 
     /// A display was clicked: the whole frozen frame.
@@ -514,7 +548,15 @@ mod app {
             w: frame.display.bounds.w,
             h: frame.display.bounds.h,
         };
-        deliver(app, capture::crop_png(&frame, whole), t, timings, "display")
+        deliver(
+            app,
+            capture::crop_png(&frame, whole),
+            t,
+            timings,
+            "display",
+            None,
+            false,
+        )
     }
 
     /// A window was clicked: that window on its own, with or without its shadow (the capture window's setting).
@@ -533,7 +575,46 @@ mod app {
             );
             Ok((png, w, h))
         });
-        deliver(app, result, t, timings, "window")
+        deliver(app, result, t, timings, "window", None, false)
+    }
+
+    /// Repeat: the last dragged region again, straight to the clipboard, no overlay.
+    pub fn repeat(app: &AppHandle) -> Result<Captured, String> {
+        let last = (*LAST_REGION.lock().unwrap()).ok_or("No region yet: drag one first.")?;
+        let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        {
+            let mut session = SESSION.lock().unwrap();
+            if session.is_some() {
+                return Err("a capture is already in progress".into());
+            }
+            *session = Some(Session {
+                id,
+                pixels: Default::default(),
+                frames: Vec::new(),
+                timings: Timings::default(),
+                hidden: None,
+            });
+        }
+        let t = Instant::now();
+        let result = hide_main_for_capture(app)
+            .and_then(|_| capture::capture_all())
+            .and_then(|frames| {
+                let frame = frames
+                    .iter()
+                    .find(|f| f.display.id == last.display)
+                    .ok_or("The display that region was on isn't attached now.")?;
+                capture::crop_png(frame, last.rect)
+            });
+        SESSION.lock().unwrap().take();
+        deliver(
+            app,
+            result,
+            t,
+            Timings::default(),
+            "repeated region",
+            Some(last),
+            true,
+        )
     }
 
     pub fn cancel(app: &AppHandle) {
@@ -575,6 +656,22 @@ mod app {
             .map_err(|e| e.to_string())?
     }
 
+    #[tauri::command]
+    async fn repeat_region(app: AppHandle) -> Result<Captured, String> {
+        tauri::async_runtime::spawn_blocking(move || repeat(&app))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// The capture window hands back the region remembered from the last launch.
+    #[tauri::command]
+    fn set_last_region(region: Option<LastRegion>) {
+        let mut last = LAST_REGION.lock().unwrap();
+        if last.is_none() {
+            *last = region;
+        }
+    }
+
     /// The capture window's mode picker and shadow setting.
     #[tauri::command]
     fn set_mode(mode: Mode, shadow: bool) {
@@ -608,12 +705,6 @@ mod app {
         })
     }
 
-    /// A line in the event log from an overlay (diagnosing input on older WebKit; never content).
-    #[tauri::command]
-    fn overlay_note(note: String) {
-        log::event(&format!("overlay: {}", note.chars().take(200).collect::<String>()));
-    }
-
     /// Side of the magnifier's patch, in device pixels (odd, so one pixel is the centre).
     const LOUPE: usize = 15;
 
@@ -623,14 +714,18 @@ mod app {
     fn loupe(display: u32, x: i64, y: i64) -> tauri::ipc::Response {
         let pixels = {
             let mut session = SESSION.lock().unwrap();
-            let Some(s) = session.as_mut() else { return tauri::ipc::Response::new(Vec::new()) };
+            let Some(s) = session.as_mut() else {
+                return tauri::ipc::Response::new(Vec::new());
+            };
             match s.pixels.get(&display) {
                 Some(p) => p.clone(),
                 None => {
                     let Some(frame) = s.frames.iter().find(|f| f.display.id == display) else {
                         return tauri::ipc::Response::new(Vec::new());
                     };
-                    let Some(p) = frame.pixels() else { return tauri::ipc::Response::new(Vec::new()) };
+                    let Some(p) = frame.pixels() else {
+                        return tauri::ipc::Response::new(Vec::new());
+                    };
                     let p = Arc::new(p);
                     s.pixels.insert(display, p.clone());
                     p
@@ -739,28 +834,39 @@ mod app {
     pub fn run() {
         use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
         let hotkey = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Digit2);
+        // Repeat the last region (M1).
+        let repeat_key = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Digit3);
 
         tauri::Builder::default()
             .plugin(
                 tauri_plugin_global_shortcut::Builder::new()
                     .with_handler(move |app, shortcut, event| {
-                        if *shortcut == hotkey && event.state() == ShortcutState::Pressed {
-                            // One press can arrive twice (seen in the e2e runs): ignore a repeat within 300 ms.
-                            static LAST: Mutex<Option<Instant>> = Mutex::new(None);
-                            {
-                                let mut last = LAST.lock().unwrap();
-                                if last.is_some_and(|t| t.elapsed() < Duration::from_millis(300)) {
-                                    return;
-                                }
-                                *last = Some(Instant::now());
-                            }
-                            let app = app.clone();
-                            std::thread::spawn(move || {
-                                if let Err(e) = begin(&app, 0) {
-                                    log::event(&format!("⌃⇧2: {e}"));
-                                }
-                            });
+                        if event.state() != ShortcutState::Pressed
+                            || (*shortcut != hotkey && *shortcut != repeat_key)
+                        {
+                            return;
                         }
+                        // One press can arrive twice (seen in the e2e runs): ignore a repeat within 300 ms.
+                        static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+                        {
+                            let mut last = LAST.lock().unwrap();
+                            if last.is_some_and(|t| t.elapsed() < Duration::from_millis(300)) {
+                                return;
+                            }
+                            *last = Some(Instant::now());
+                        }
+                        let app = app.clone();
+                        let repeat_it = *shortcut == repeat_key;
+                        std::thread::spawn(move || {
+                            if repeat_it {
+                                if let Err(e) = repeat(&app) {
+                                    log::event(&format!("⌃⇧3: {e}"));
+                                    let _ = app.emit_to("main", "capture-error", e);
+                                }
+                            } else if let Err(e) = begin(&app, 0) {
+                                log::event(&format!("⌃⇧2: {e}"));
+                            }
+                        });
                     })
                     .build(),
             )
@@ -770,8 +876,9 @@ mod app {
                 finish_window_capture,
                 finish_display_capture,
                 set_mode,
+                repeat_region,
+                set_last_region,
                 loupe,
-                overlay_note,
                 cancel_capture,
                 e2e_selection,
                 permission,
@@ -787,6 +894,9 @@ mod app {
                 log::event("started");
                 if let Err(e) = app.global_shortcut().register(hotkey) {
                     log::event(&format!("⌃⇧2 not registered: {e}"));
+                }
+                if let Err(e) = app.global_shortcut().register(repeat_key) {
+                    log::event(&format!("⌃⇧3 not registered: {e}"));
                 }
                 ensure_overlays(app.handle());
                 hide_overlays(app.handle()); // prepares them for the first New

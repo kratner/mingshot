@@ -248,10 +248,6 @@ export default function Overlay({ display }: { display: number }) {
       }
       if (!dragFrom.current) return;
       const step = nudgeFor(e.key || '', e.altKey, e.keyCode);
-      // Diagnosis for older WebKit (Keith, 2026-11-26: arrows didn't nudge on Mojave): the key's name and code only.
-      invoke('overlay_note', {
-        note: `drag key: key=${e.key} code=${e.code} keyCode=${e.keyCode} alt=${e.altKey} shift=${e.shiftKey} used=${!!step}`,
-      }).catch(() => {});
       if (step) {
         e.preventDefault();
         nudge.current = { x: nudge.current.x + step.x, y: nudge.current.y + step.y };

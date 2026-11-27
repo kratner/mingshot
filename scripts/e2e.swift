@@ -11,6 +11,7 @@
 // be identical. `screencapture -R` (the ⌘⇧4 path) is reported for information: it differs from the screen itself
 // by a few levels over glass and blur materials. Also checks that Esc cancels and leaves the clipboard alone.
 //
+// Repeat: after the regions, ⌃⇧3 must copy the last region again, identical to the screen.
 // Window: the pointer goes to an uncovered spot on up to three other apps' windows and MingShot clicks there
 // (MINGSHOT_E2E_SELECT=pointer); the clipboard must equal `screencapture -l<id>` (with shadow), alpha included.
 // Display: the pointer goes to each display and MingShot clicks; the clipboard must equal `screencapture -D`.
@@ -43,6 +44,7 @@ func key(_ code: CGKeyCode, _ flags: CGEventFlags = []) {
 }
 
 func hotkey() { key(19, [.maskControl, .maskShift]) }  // ⌃⇧2
+func repeatKey() { key(20, [.maskControl, .maskShift]) }  // ⌃⇧3: repeat the last region
 func escape() { key(53) }
 
 func screencapture(_ args: [String], _ path: String) -> Bool {
@@ -189,6 +191,25 @@ default:
         _ = screencapture(["-D", "\(n + 1)"], after)
         check("region on display \(id) (\(scale)x)", png, before: read(before).flatMap { pixels($0, crop: crop) },
               after: read(after).flatMap { pixels($0, crop: crop) }, alpha: false, ours: "\(out)/e2e-\(n)-mingshot.png")
+        sleepMs(400)
+    }
+
+    // Repeat (⌃⇧3): the last region tested (on the last display) again, no overlay.
+    if let lastID = displayIDs.last {
+        let n = displayIDs.count - 1
+        let b = CGDisplayBounds(lastID)
+        let scale = Double(CGDisplayCopyDisplayMode(lastID)?.pixelWidth ?? Int(b.width)) / b.width
+        let crop = CGRect(x: sel.minX * scale, y: sel.minY * scale, width: sel.width * scale, height: sel.height * scale)
+        let before = "\(out)/e2e-repeat-before-D.png", after = "\(out)/e2e-repeat-after-D.png"
+        NSPasteboard.general.clearContents()
+        move(CGPoint(x: b.midX, y: b.maxY - 40)); sleepMs(200)  // pointer well away from the region
+        _ = screencapture(["-D", "\(n + 1)"], before)
+        repeatKey()
+        let png = awaitClipboard()
+        sleepMs(300)
+        _ = screencapture(["-D", "\(n + 1)"], after)
+        check("repeat last region (⌃⇧3) on display \(lastID)", png, before: read(before).flatMap { pixels($0, crop: crop) },
+              after: read(after).flatMap { pixels($0, crop: crop) }, alpha: false, ours: "\(out)/e2e-repeat-mingshot.png")
         sleepMs(400)
     }
 

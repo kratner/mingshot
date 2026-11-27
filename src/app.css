@@ -69,6 +69,27 @@ button.new:disabled {
   opacity: 0.45;
   cursor: default;
 }
+button.repeat {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--fo-line);
+  border-radius: var(--fo-radius-md);
+  background: var(--fo-surface);
+  color: var(--fo-text);
+  font: 500 13px var(--fo-font-text);
+  cursor: pointer;
+}
+button.repeat:hover {
+  border-color: var(--fo-gold);
+}
+button.repeat:disabled {
+  opacity: 0.4;
+  cursor: default;
+  border-color: var(--fo-line);
+}
+.toolbar > button.repeat {
+  margin-left: 8px;
+}
 button.new .plus {
   font-size: 18px;
   line-height: 1;
