@@ -41,6 +41,7 @@ objc2-screen-capture-kit = { version = "0.3", default-features = false, features
     "SCScreenshotManager",
 ] }
 objc2-image-io = "0.3"
+objc2-application-services = "0.3"
 
 [profile.release]
 codegen-units = 1

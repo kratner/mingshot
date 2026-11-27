@@ -8,6 +8,8 @@ pub mod capture;
 pub mod compat;
 pub mod log;
 #[cfg(target_os = "macos")]
+pub mod metadata;
+#[cfg(target_os = "macos")]
 pub mod output;
 #[cfg(target_os = "macos")]
 mod overlay;
@@ -50,6 +52,10 @@ mod app {
         timings: Timings,
         /// Where the capture window was before New hid it (global points), for bench mode's check.
         hidden: Option<Rect>,
+        /// When New (or ⌃⇧2) was pressed, for the metadata.
+        started_at: String,
+        /// The windows on screen at that moment, front to back (metadata's source window; window mode's targets).
+        windows: Vec<crate::windows::WindowInfo>,
     }
 
     static SESSION: Mutex<Option<Session>> = Mutex::new(None);
@@ -81,11 +87,68 @@ mod app {
         after: crate::output::After::Copy,
     });
 
+    /// What's known about a capture when it's delivered; the source window's details are added afterwards.
+    struct MetaCtx {
+        captured_at: String,
+        kind: &'static str,
+        display: capture::Display,
+        /// In the display's points (relative to its top-left corner) and pixels.
+        area_points: Rect,
+        area_pixels: Rect,
+        window: Option<crate::windows::WindowInfo>,
+    }
+
+    impl MetaCtx {
+        fn finish(self) -> crate::metadata::Meta {
+            let d = self.display;
+            crate::metadata::Meta {
+                captured_at: self.captured_at,
+                kind: self.kind.to_string(),
+                display: crate::metadata::DisplayMeta {
+                    id: d.id,
+                    name: None,
+                    scale: d.scale(),
+                    width_pixels: d.px_w,
+                    height_pixels: d.px_h,
+                },
+                area_points: self.area_points,
+                area_pixels: self.area_pixels,
+                source: self.window.as_ref().map(crate::metadata::source),
+                app_version: env!("CARGO_PKG_VERSION").to_string(),
+            }
+        }
+    }
+
+    /// The session's start time and window list (for metadata), read before the session ends.
+    fn session_context() -> (String, Vec<crate::windows::WindowInfo>) {
+        SESSION
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|s| (s.started_at.clone(), s.windows.clone()))
+            .unwrap_or_else(|| (crate::metadata::now_iso(), crate::windows::on_screen()))
+    }
+
+    fn pixel_rect(d: &capture::Display, r: Rect) -> Rect {
+        let (x, y, w, h) = capture::to_pixels(r, d.bounds, d.px_w, d.px_h);
+        Rect {
+            x: x as f64,
+            y: y as f64,
+            w: w as f64,
+            h: h as f64,
+        }
+    }
+
+    /// Counts captures, so a slow metadata lookup can't attach itself to a newer capture.
+    static CAPTURE_SEQ: AtomicU64 = AtomicU64::new(0);
+
     /// The last capture's PNG and where it went, for the status line's Copy / Save / Show in Finder / Open.
     struct Last {
+        seq: u64,
         png: Vec<u8>,
         copied: bool,
         saved: Option<std::path::PathBuf>,
+        meta: Option<crate::metadata::Meta>,
     }
 
     static LAST: Mutex<Option<Last>> = Mutex::new(None);
@@ -125,10 +188,15 @@ mod app {
     }
 
     /// Tells each display's overlay the mode and, in window mode, the windows on it as they are now.
-    fn send_targets(app: &AppHandle, displays: &[capture::Display]) {
+    fn send_targets(app: &AppHandle, id: u64, displays: &[capture::Display]) {
         let mode = SETTINGS.lock().unwrap().mode;
+        // Read once: the window list as it is now, for window mode's highlight and every capture's metadata.
+        let snapshot = crate::windows::on_screen();
+        if let Some(s) = SESSION.lock().unwrap().as_mut().filter(|s| s.id == id) {
+            s.windows = snapshot.clone();
+        }
         let all = if mode == Mode::Window {
-            crate::windows::on_screen()
+            snapshot
         } else {
             Vec::new()
         };
@@ -253,6 +321,8 @@ mod app {
                 frames: Vec::new(),
                 timings: Timings::default(),
                 hidden: None,
+                started_at: crate::metadata::now_iso(),
+                windows: Vec::new(),
             });
         }
         let result = begin_inner(app, id, delay_s);
@@ -325,7 +395,7 @@ mod app {
             key
         })?;
         let ui_ms = ms(t0);
-        send_targets(app, &displays);
+        send_targets(app, id, &displays);
         if let Some(display) = key {
             let rect = if std::env::var("MINGSHOT_E2E_SELECT").as_deref() == Ok("pointer") {
                 // A click where the pointer is (window and display modes).
@@ -397,7 +467,13 @@ mod app {
             }
             let windows: Vec<(u32, tauri::WebviewWindow)> = overlay_windows(&a)
                 .into_iter()
-                .filter_map(|w| w.label().trim_start_matches("overlay-").parse().ok().map(|d| (d, w)))
+                .filter_map(|w| {
+                    w.label()
+                        .trim_start_matches("overlay-")
+                        .parse()
+                        .ok()
+                        .map(|d| (d, w))
+                })
                 .collect();
             let ui: Vec<(u32, &NSWindow)> = windows
                 .iter()
@@ -528,6 +604,8 @@ mod app {
     }
 
     /// The picture is made: on the clipboard, capture window back, and tell it what happened.
+    // Every caller passes all of these and they read clearly at the call sites.
+    #[allow(clippy::too_many_arguments)]
     fn deliver(
         app: &AppHandle,
         result: Result<(Vec<u8>, usize, usize), String>,
@@ -536,6 +614,7 @@ mod app {
         what: &str,
         region: Option<LastRegion>,
         repeated: bool,
+        ctx: MetaCtx,
     ) -> Result<Captured, String> {
         let (png, width, height) = match result {
             Ok(r) => r,
@@ -563,10 +642,14 @@ mod app {
             let copy = png.clone();
             on_main(app, move |_| capture::copy_png(&copy))?;
         }
+        let seq = CAPTURE_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+        let saved_path = saved.clone();
         let last = Last {
+            seq,
             png,
             copied: after.copies(),
             saved,
+            meta: None,
         };
         let captured = Captured {
             width,
@@ -590,6 +673,20 @@ mod app {
         ));
         show_main(app);
         let _ = app.emit_to("main", "captured", captured.clone());
+        // The source window's details can take a moment (Accessibility), so they follow the picture.
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let meta = ctx.finish();
+            if let Some(path) = &saved_path
+                && let Err(e) = crate::metadata::write_sidecar(path, &meta)
+            {
+                log::event(&format!("sidecar: {e}"));
+            }
+            if let Some(l) = LAST.lock().unwrap().as_mut().filter(|l| l.seq == seq) {
+                l.meta = Some(meta.clone());
+            }
+            let _ = app.emit_to("main", "metadata", meta);
+        });
         Ok(captured)
     }
 
@@ -597,7 +694,21 @@ mod app {
     pub fn finish(app: &AppHandle, display: u32, sel: Rect) -> Result<Captured, String> {
         let t = Instant::now();
         let frame = frame_for(app, display)?;
+        let (captured_at, windows) = session_context();
         let timings = end_session(app);
+        let d = frame.display;
+        let centre = (
+            d.bounds.x + sel.x + sel.w / 2.0,
+            d.bounds.y + sel.y + sel.h / 2.0,
+        );
+        let ctx = MetaCtx {
+            captured_at,
+            kind: "region",
+            display: d,
+            area_points: sel,
+            area_pixels: pixel_rect(&d, sel),
+            window: crate::metadata::window_at(&windows, centre).cloned(),
+        };
         deliver(
             app,
             capture::crop_png(&frame, sel),
@@ -606,6 +717,7 @@ mod app {
             "region",
             Some(LastRegion { display, rect: sel }),
             false,
+            ctx,
         )
     }
 
@@ -613,12 +725,35 @@ mod app {
     pub fn finish_display(app: &AppHandle, display: u32) -> Result<Captured, String> {
         let t = Instant::now();
         let frame = frame_for(app, display)?;
+        let (captured_at, windows) = session_context();
         let timings = end_session(app);
+        let d = frame.display;
         let whole = Rect {
             x: 0.0,
             y: 0.0,
-            w: frame.display.bounds.w,
-            h: frame.display.bounds.h,
+            w: d.bounds.w,
+            h: d.bounds.h,
+        };
+        // The source of a whole display: its frontmost ordinary window.
+        let b = d.bounds;
+        let window = windows
+            .iter()
+            .find(|w| {
+                let r = w.bounds;
+                w.layer == 0
+                    && r.x < b.x + b.w
+                    && r.x + r.w > b.x
+                    && r.y < b.y + b.h
+                    && r.y + r.h > b.y
+            })
+            .cloned();
+        let ctx = MetaCtx {
+            captured_at,
+            kind: "display",
+            display: d,
+            area_points: whole,
+            area_pixels: pixel_rect(&d, whole),
+            window,
         };
         deliver(
             app,
@@ -628,6 +763,7 @@ mod app {
             "display",
             None,
             false,
+            ctx,
         )
     }
 
@@ -638,7 +774,37 @@ mod app {
             return Err("no capture in progress".into());
         }
         let shadow = SETTINGS.lock().unwrap().shadow;
+        let (captured_at, windows) = session_context();
         let timings = end_session(app);
+        let window = windows.iter().find(|w| w.id == window_id).cloned();
+        // The display the window is mostly on (its centre's), and the window's frame on it.
+        let displays = capture::displays();
+        let display = window
+            .as_ref()
+            .and_then(|w| {
+                let c = (w.bounds.x + w.bounds.w / 2.0, w.bounds.y + w.bounds.h / 2.0);
+                displays.iter().find(|d| {
+                    let b = d.bounds;
+                    c.0 >= b.x && c.0 < b.x + b.w && c.1 >= b.y && c.1 < b.y + b.h
+                })
+            })
+            .or(displays.first())
+            .copied()
+            .ok_or("no displays")?;
+        let frame_on_display = window.as_ref().map_or(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+            },
+            |w| Rect {
+                x: w.bounds.x - display.bounds.x,
+                y: w.bounds.y - display.bounds.y,
+                w: w.bounds.w,
+                h: w.bounds.h,
+            },
+        );
         let result = crate::windows::capture(window_id, shadow).and_then(|img| {
             let png = capture::encode_png(&img)?;
             let (w, h) = (
@@ -647,7 +813,24 @@ mod app {
             );
             Ok((png, w, h))
         });
-        deliver(app, result, t, timings, "window", None, false)
+        let area_pixels = match &result {
+            Ok((_, w, h)) => Rect {
+                x: 0.0,
+                y: 0.0,
+                w: *w as f64,
+                h: *h as f64,
+            },
+            Err(_) => pixel_rect(&display, frame_on_display),
+        };
+        let ctx = MetaCtx {
+            captured_at,
+            kind: "window",
+            display,
+            area_points: frame_on_display,
+            area_pixels,
+            window,
+        };
+        deliver(app, result, t, timings, "window", None, false, ctx)
     }
 
     /// Repeat: the last dragged region again, straight to the clipboard, no overlay.
@@ -665,9 +848,14 @@ mod app {
                 frames: Vec::new(),
                 timings: Timings::default(),
                 hidden: None,
+                started_at: crate::metadata::now_iso(),
+                windows: Vec::new(),
             });
         }
         let t = Instant::now();
+        let captured_at = crate::metadata::now_iso();
+        let windows = crate::windows::on_screen();
+        let mut display = None;
         let result = hide_main_for_capture(app)
             .and_then(|_| capture::capture_all())
             .and_then(|frames| {
@@ -675,9 +863,23 @@ mod app {
                     .iter()
                     .find(|f| f.display.id == last.display)
                     .ok_or("The display that region was on isn't attached now.")?;
+                display = Some(frame.display);
                 capture::crop_png(frame, last.rect)
             });
         SESSION.lock().unwrap().take();
+        let d = display
+            .or_else(|| capture::displays().first().copied())
+            .ok_or("no displays")?;
+        let r = last.rect;
+        let centre = (d.bounds.x + r.x + r.w / 2.0, d.bounds.y + r.y + r.h / 2.0);
+        let ctx = MetaCtx {
+            captured_at,
+            kind: "region",
+            display: d,
+            area_points: r,
+            area_pixels: pixel_rect(&d, r),
+            window: crate::metadata::window_at(&windows, centre).cloned(),
+        };
         deliver(
             app,
             result,
@@ -686,6 +888,7 @@ mod app {
             "repeated region",
             Some(last),
             true,
+            ctx,
         )
     }
 
@@ -735,6 +938,16 @@ mod app {
             .map_err(|e| e.to_string())?
     }
 
+    /// Accessibility, for web addresses and file paths in the metadata: allowed? (`request`: show macOS's prompt.)
+    #[tauri::command]
+    fn accessibility(request: bool) -> bool {
+        if request {
+            crate::metadata::ax_request()
+        } else {
+            crate::metadata::ax_trusted()
+        }
+    }
+
     /// The capture window hands back the region remembered from the last launch.
     #[tauri::command]
     fn set_last_region(region: Option<LastRegion>) {
@@ -758,7 +971,13 @@ mod app {
                 }
                 "save" | "open" | "reveal" => {
                     if last.saved.is_none() {
-                        last.saved = Some(crate::output::save(&last.png)?);
+                        let path = crate::output::save(&last.png)?;
+                        if let Some(meta) = &last.meta
+                            && let Err(e) = crate::metadata::write_sidecar(&path, meta)
+                        {
+                            log::event(&format!("sidecar: {e}"));
+                        }
+                        last.saved = Some(path);
                     }
                     let path = last.saved.clone().unwrap();
                     match action.as_str() {
@@ -991,6 +1210,7 @@ mod app {
                 set_mode,
                 repeat_region,
                 last_capture,
+                accessibility,
                 set_last_region,
                 loupe,
                 cancel_capture,

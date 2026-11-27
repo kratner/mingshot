@@ -28,6 +28,18 @@ type Captured = {
   delivered: Delivered;
 };
 type Delivered = { copied: boolean; saved: string | null };
+/** What MingShot recorded about a capture (metadata.rs); arrives just after the capture itself. */
+type Meta = {
+  captured_at: string;
+  kind: string;
+  source: {
+    app: string;
+    bundle_id: string | null;
+    window_title: string;
+    url: string | null;
+    file_path: string | null;
+  } | null;
+};
 type After = 'copy' | 'save' | 'both';
 
 type Mode = 'region' | 'window' | 'display';
@@ -84,10 +96,17 @@ export default function CaptureWindow() {
     }
   });
 
+  // The last capture's metadata, and whether Accessibility (web addresses, file paths) is allowed.
+  const [meta, setMeta] = useState<Meta | null>(null);
+  const [axAllowed, setAxAllowed] = useState(true);
+
   useEffect(() => {
     invoke<boolean>('permission').then(setPermitted);
+    invoke<boolean>('accessibility', { request: false }).then(setAxAllowed);
     invoke('set_last_region', { region: lastRegion }).catch(() => {});
+    const offMeta = listen<Meta>('metadata', (e) => setMeta(e.payload));
     const offCaptured = listen<Captured>('captured', (e) => {
+      setMeta(null);
       setStatus({ kind: 'copied', captured: e.payload, clickMs: clickMs.current });
       if (e.payload.region) {
         setLastRegion(e.payload.region);
@@ -97,7 +116,10 @@ export default function CaptureWindow() {
     const offError = listen<string>('capture-error', (e) => setStatus({ kind: 'error', message: e.payload }));
     const offCancelled = listen('cancelled', () => setStatus({ kind: 'cancelled' }));
     // Re-check the permission whenever the window comes back (after a trip to System Settings).
-    const onFocus = () => invoke<boolean>('permission').then(setPermitted);
+    const onFocus = () => {
+      invoke<boolean>('permission').then(setPermitted);
+      invoke<boolean>('accessibility', { request: false }).then(setAxAllowed);
+    };
     window.addEventListener('focus', onFocus);
     invoke<number>('bench_runs').then((n) => {
       if (n > 0) {
@@ -109,6 +131,7 @@ export default function CaptureWindow() {
       offCaptured.then((f) => f());
       offCancelled.then((f) => f());
       offError.then((f) => f());
+      offMeta.then((f) => f());
       window.removeEventListener('focus', onFocus);
     };
   }, []);
@@ -223,6 +246,13 @@ export default function CaptureWindow() {
             onError={(message) => setStatus({ kind: 'error', message })}
           />
         )}
+        {status.kind === 'copied' && meta?.source && (
+          <SourceLine
+            meta={meta}
+            axAllowed={axAllowed}
+            onAllow={() => invoke<boolean>('accessibility', { request: true }).then(setAxAllowed)}
+          />
+        )}
       </div>
     </div>
   );
@@ -261,6 +291,27 @@ const HINTS: Record<Mode, string> = {
   window: 'New or ⌃⇧2, then click a window (or drag a region). Esc cancels.',
   display: 'New or ⌃⇧2, then click a display (or drag a region). Esc cancels.',
 };
+
+/// Where the capture came from: app and window title, and the page or file when MingShot may ask (Accessibility).
+function SourceLine({ meta, axAllowed, onAllow }: { meta: Meta; axAllowed: boolean; onAllow: () => void }) {
+  const src = meta.source!;
+  const where = src.url ?? (src.file_path ? fileName(src.file_path) : null);
+  return (
+    <div className="status-sub source" title={[src.app, src.window_title, src.url ?? src.file_path].filter(Boolean).join('\n')}>
+      from <strong>{src.app}</strong>
+      {src.window_title && <> · {src.window_title}</>}
+      {where && <> · {where}</>}
+      {!where && !axAllowed && (
+        <>
+          {' '}
+          <button className="link quiet" onClick={onAllow} title="Needs Accessibility; macOS will ask">
+            Add web addresses and file paths…
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
 
 /// The file's name, from its full path.
 const fileName = (path: string) => path.slice(path.lastIndexOf('/') + 1);

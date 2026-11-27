@@ -1,0 +1,425 @@
+//! Metadata recorded with every capture (M1, PLAN.md §2 "Metadata", §7.7): when, which display, where on it, and the
+//! source window (app, bundle id, title), plus its web address or document path when MingShot may ask the app
+//! through Accessibility. Saved beside a saved PNG as a `.mingshot` sidecar; the clipboard stays image only (§7.8).
+//!
+//! Web addresses and file paths need the Accessibility permission. MingShot never asks for it on its own: the
+//! capture window offers it, and without it those two fields are simply empty.
+
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+use crate::capture::Rect;
+use crate::windows::WindowInfo;
+
+/// Everything known about one capture.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct Meta {
+    /// Local time with its UTC offset, e.g. 2026-11-26T21:11:43-05:00.
+    pub captured_at: String,
+    /// "region", "window" or "display".
+    pub kind: String,
+    pub display: DisplayMeta,
+    /// What was captured, in the display's points and pixels (for a window: its frame).
+    pub area_points: Rect,
+    pub area_pixels: Rect,
+    /// The window the capture came from: the window captured, or the frontmost window under the region's centre
+    /// (or, for a display, its frontmost window). None over the bare desktop.
+    pub source: Option<Source>,
+    pub app_version: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct DisplayMeta {
+    pub id: u32,
+    pub name: Option<String>,
+    pub scale: f64,
+    pub width_pixels: usize,
+    pub height_pixels: usize,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct Source {
+    pub app: String,
+    pub bundle_id: Option<String>,
+    pub window_title: String,
+    /// The page's address, when the window is a browser and Accessibility is allowed.
+    pub url: Option<String>,
+    /// The document's file, when the app says which and Accessibility is allowed.
+    pub file_path: Option<String>,
+    #[serde(skip)]
+    pub pid: i32,
+    #[serde(skip)]
+    pub window_id: u32,
+}
+
+/// The current local time as ISO 8601 with offset.
+pub fn now_iso() -> String {
+    use objc2_foundation::{NSDate, NSDateFormatter, NSLocale, NSString};
+    let f = NSDateFormatter::new();
+    f.setLocale(Some(&NSLocale::localeWithLocaleIdentifier(
+        &NSString::from_str("en_US_POSIX"),
+    )));
+    f.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd'T'HH:mm:ssXXXXX")));
+    f.stringFromDate(&NSDate::now()).to_string()
+}
+
+/// The frontmost ordinary window (layer 0) containing `p` (global points), from a front-to-back list.
+pub fn window_at(windows: &[WindowInfo], p: (f64, f64)) -> Option<&WindowInfo> {
+    windows.iter().find(|w| {
+        w.layer == 0
+            && p.0 >= w.bounds.x
+            && p.0 < w.bounds.x + w.bounds.w
+            && p.1 >= w.bounds.y
+            && p.1 < w.bounds.y + w.bounds.h
+    })
+}
+
+/// A source from a window: app and title from the window list, bundle id from the running app, and (when allowed)
+/// the address or file from Accessibility.
+pub fn source(w: &WindowInfo) -> Source {
+    let (url, file_path) = if ax_trusted() {
+        ax_document(w)
+    } else {
+        (None, None)
+    };
+    Source {
+        app: w.app.clone(),
+        bundle_id: bundle_id(w.pid),
+        window_title: w.title.clone(),
+        url,
+        file_path,
+        pid: w.pid,
+        window_id: w.id,
+    }
+}
+
+fn bundle_id(pid: i32) -> Option<String> {
+    use objc2_app_kit::NSRunningApplication;
+    let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?;
+    app.bundleIdentifier().map(|s| s.to_string())
+}
+
+/// What an `AXDocument` / `AXURL` value means: a web address, or a local file's path.
+pub fn classify(value: &str) -> (Option<String>, Option<String>) {
+    if value.starts_with("http://") || value.starts_with("https://") {
+        (Some(value.to_string()), None)
+    } else if let Some(rest) = value.strip_prefix("file://") {
+        let path = rest.strip_prefix("localhost").unwrap_or(rest);
+        (None, Some(percent_decode(path)))
+    } else {
+        (None, None)
+    }
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(b);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+// ---- Accessibility -------------------------------------------------------------------------------------------
+
+/// Whether MingShot may read other apps' windows (Accessibility).
+pub fn ax_trusted() -> bool {
+    // SAFETY: documented call, no arguments.
+    unsafe { objc2_application_services::AXIsProcessTrusted() }
+}
+
+/// Shows macOS's Accessibility prompt (it opens System Settings). Only from a click in the capture window.
+pub fn ax_request() -> bool {
+    use objc2_application_services::kAXTrustedCheckOptionPrompt;
+    use objc2_core_foundation::{CFBoolean, CFDictionary};
+    // SAFETY: the documented options dictionary: { kAXTrustedCheckOptionPrompt: true }.
+    unsafe {
+        let key: &objc2_core_foundation::CFString = kAXTrustedCheckOptionPrompt;
+        let dict = CFDictionary::from_slices(&[key], &[CFBoolean::new(true)]);
+        objc2_application_services::AXIsProcessTrustedWithOptions(Some(dict.as_opaque()))
+    }
+}
+
+/// The window's document: its `AXDocument` (file or address) or, for a browser, the web area's `AXURL`. At most a
+/// third of a second per app, so a hung app can't hold up a capture.
+fn ax_document(w: &WindowInfo) -> (Option<String>, Option<String>) {
+    use objc2_application_services::AXUIElement;
+    let deadline = Instant::now() + Duration::from_millis(330);
+    // SAFETY: documented calls on an element we own.
+    let app = unsafe { AXUIElement::new_application(w.pid) };
+    unsafe { app.set_messaging_timeout(0.25) };
+    let Some(windows) = ax_children(&app, "AXWindows") else {
+        return (None, None);
+    };
+    // The AX window that is this window: same title, else same position and size.
+    let window = windows
+        .iter()
+        .find(|el| {
+            ax_string(el, "AXTitle").as_deref() == Some(w.title.as_str()) && !w.title.is_empty()
+        })
+        .or_else(|| {
+            windows
+                .iter()
+                .find(|el| ax_frame(el).is_some_and(|f| near(f, w.bounds)))
+        })
+        .or(windows.first());
+    let Some(window) = window else {
+        return (None, None);
+    };
+    if let Some(doc) = ax_string(window, "AXDocument") {
+        let found = classify(&doc);
+        if found != (None, None) {
+            return found;
+        }
+    }
+    // Browsers: the first web area under the window carries the page's address.
+    let mut queue: std::collections::VecDeque<(
+        objc2_core_foundation::CFRetained<AXUIElement>,
+        usize,
+    )> = std::collections::VecDeque::new();
+    queue.push_back((window.clone(), 0));
+    let mut seen = 0;
+    while let Some((el, depth)) = queue.pop_front() {
+        seen += 1;
+        if seen > 3000 || Instant::now() > deadline {
+            break;
+        }
+        if ax_string(&el, "AXRole").as_deref() == Some("AXWebArea")
+            && let Some(url) = ax_url(&el, "AXURL")
+        {
+            return classify(&url);
+        }
+        if depth < 30 {
+            for child in ax_children(&el, "AXChildren").unwrap_or_default() {
+                queue.push_back((child, depth + 1));
+            }
+        }
+    }
+    (None, None)
+}
+
+fn near(a: Rect, b: Rect) -> bool {
+    (a.x - b.x).abs() < 2.0
+        && (a.y - b.y).abs() < 2.0
+        && (a.w - b.w).abs() < 2.0
+        && (a.h - b.h).abs() < 2.0
+}
+
+fn ax_value(
+    el: &objc2_application_services::AXUIElement,
+    attr: &str,
+) -> Option<objc2_core_foundation::CFRetained<objc2_core_foundation::CFType>> {
+    use objc2_core_foundation::{CFRetained, CFString, CFType};
+    let name = CFString::from_str(attr);
+    let mut value: *const CFType = std::ptr::null();
+    // SAFETY: copy rule: on success `value` is a retained CF object we take over.
+    let err = unsafe { el.copy_attribute_value(&name, std::ptr::NonNull::from(&mut value)) };
+    if err.0 != 0 || value.is_null() {
+        return None;
+    }
+    // SAFETY: non-null and owned (copy rule).
+    Some(unsafe { CFRetained::from_raw(std::ptr::NonNull::new(value as *mut CFType)?) })
+}
+
+fn ax_string(el: &objc2_application_services::AXUIElement, attr: &str) -> Option<String> {
+    let v = ax_value(el, attr)?;
+    v.downcast_ref::<objc2_core_foundation::CFString>()
+        .map(|s| s.to_string())
+}
+
+fn ax_url(el: &objc2_application_services::AXUIElement, attr: &str) -> Option<String> {
+    let v = ax_value(el, attr)?;
+    if let Some(s) = v.downcast_ref::<objc2_core_foundation::CFString>() {
+        return Some(s.to_string());
+    }
+    let url = v.downcast_ref::<objc2_core_foundation::CFURL>()?;
+    url.string().to_string().into()
+}
+
+fn ax_children(
+    el: &objc2_application_services::AXUIElement,
+    attr: &str,
+) -> Option<Vec<objc2_core_foundation::CFRetained<objc2_application_services::AXUIElement>>> {
+    use objc2_application_services::AXUIElement;
+    use objc2_core_foundation::{CFArray, CFRetained};
+    let v = ax_value(el, attr)?;
+    let array = v.downcast_ref::<CFArray>()?;
+    let mut out = Vec::new();
+    for i in 0..array.count() {
+        // SAFETY: AX arrays of elements hold AXUIElementRefs; retain each to keep it.
+        let item = unsafe { array.value_at_index(i) } as *const AXUIElement;
+        if let Some(p) = std::ptr::NonNull::new(item as *mut AXUIElement) {
+            out.push(unsafe { CFRetained::retain(p) });
+        }
+    }
+    Some(out)
+}
+
+fn ax_frame(el: &objc2_application_services::AXUIElement) -> Option<Rect> {
+    use objc2_application_services::{AXValue, AXValueType};
+    use objc2_core_foundation::{CGPoint, CGSize};
+    let get = |attr: &str, kind: AXValueType, out: *mut std::ffi::c_void| -> bool {
+        let Some(v) = ax_value(el, attr) else {
+            return false;
+        };
+        let Some(v) = v.downcast_ref::<AXValue>() else {
+            return false;
+        };
+        // SAFETY: `out` points at a value of the type `kind` names.
+        unsafe { v.value(kind, std::ptr::NonNull::new(out).unwrap()) }
+    };
+    let mut p = CGPoint::new(0.0, 0.0);
+    let mut s = CGSize::new(0.0, 0.0);
+    let ok = get(
+        "AXPosition",
+        AXValueType::CGPoint,
+        &mut p as *mut _ as *mut _,
+    ) && get("AXSize", AXValueType::CGSize, &mut s as *mut _ as *mut _);
+    ok.then_some(Rect {
+        x: p.x,
+        y: p.y,
+        w: s.width,
+        h: s.height,
+    })
+}
+
+// ---- Sidecar ---------------------------------------------------------------------------------------------------
+
+/// The `.mingshot` file beside a saved PNG (PLAN.md §2 "Library"): the image's name, its metadata, and (from M2) the
+/// editable annotations.
+#[derive(serde::Serialize)]
+struct Sidecar<'a> {
+    format: &'static str,
+    version: u32,
+    image: String,
+    metadata: &'a Meta,
+    annotations: [u8; 0],
+}
+
+/// Writes `<name>.mingshot` beside `png_path`; returns its path.
+pub fn write_sidecar(png_path: &Path, meta: &Meta) -> Result<std::path::PathBuf, String> {
+    let path = png_path.with_extension("mingshot");
+    let doc = Sidecar {
+        format: "mingshot",
+        version: 1,
+        image: png_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        metadata: meta,
+        annotations: [],
+    };
+    let json = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn win(id: u32, layer: i32, x: f64, y: f64, w: f64, h: f64) -> WindowInfo {
+        WindowInfo {
+            id,
+            bounds: Rect { x, y, w, h },
+            pid: 1,
+            app: format!("App{id}"),
+            title: String::new(),
+            layer,
+        }
+    }
+
+    #[test]
+    fn picks_the_frontmost_ordinary_window_under_a_point() {
+        let list = vec![
+            win(1, 101, 0.0, 0.0, 500.0, 500.0), // a menu: skipped
+            win(2, 0, 100.0, 100.0, 100.0, 100.0),
+            win(3, 0, 0.0, 0.0, 400.0, 400.0),
+        ];
+        assert_eq!(window_at(&list, (150.0, 150.0)).map(|w| w.id), Some(2));
+        assert_eq!(window_at(&list, (300.0, 300.0)).map(|w| w.id), Some(3));
+        assert_eq!(window_at(&list, (450.0, 450.0)).map(|w| w.id), None);
+    }
+
+    #[test]
+    fn documents_are_addresses_or_paths() {
+        assert_eq!(
+            classify("https://example.com/a?b=1"),
+            (Some("https://example.com/a?b=1".into()), None)
+        );
+        assert_eq!(
+            classify("file:///Users/k/My%20Notes.txt"),
+            (None, Some("/Users/k/My Notes.txt".into()))
+        );
+        assert_eq!(
+            classify("file://localhost/tmp/x.png"),
+            (None, Some("/tmp/x.png".into()))
+        );
+        assert_eq!(classify("about:blank"), (None, None));
+    }
+
+    #[test]
+    fn time_is_iso_with_offset() {
+        let t = now_iso();
+        assert_eq!(t.len(), "2026-11-26T21:11:43-05:00".len(), "{t}");
+        assert_eq!(&t[10..11], "T", "{t}");
+        assert!(
+            t.ends_with('Z') || t[19..].starts_with('+') || t[19..].starts_with('-'),
+            "{t}"
+        );
+    }
+
+    #[test]
+    fn sidecar_sits_beside_the_png() {
+        let dir = std::env::temp_dir().join(format!("mingshot-meta-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("MingShot 2026-11-26 at 21.11.43.png");
+        let meta = Meta {
+            captured_at: "2026-11-26T21:11:43-05:00".into(),
+            kind: "region".into(),
+            display: DisplayMeta {
+                id: 3,
+                name: None,
+                scale: 2.0,
+                width_pixels: 3840,
+                height_pixels: 2160,
+            },
+            area_points: Rect {
+                x: 1.0,
+                y: 2.0,
+                w: 3.0,
+                h: 4.0,
+            },
+            area_pixels: Rect {
+                x: 2.0,
+                y: 4.0,
+                w: 6.0,
+                h: 8.0,
+            },
+            source: None,
+            app_version: "0.0.1".into(),
+        };
+        let path = write_sidecar(&png, &meta).unwrap();
+        assert_eq!(
+            path.file_name().unwrap(),
+            "MingShot 2026-11-26 at 21.11.43.mingshot"
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["format"], "mingshot");
+        assert_eq!(v["image"], "MingShot 2026-11-26 at 21.11.43.png");
+        assert_eq!(v["metadata"]["kind"], "region");
+        assert_eq!(v["metadata"]["display"]["scale"], 2.0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

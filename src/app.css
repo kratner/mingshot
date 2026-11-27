@@ -173,6 +173,19 @@ button.new {
   font-size: 12px;
   color: var(--fo-muted);
 }
+.status-sub.source {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status-sub.source strong {
+  font-weight: 600;
+  color: var(--fo-text-2);
+}
+button.link.quiet {
+  color: var(--fo-muted);
+  margin-left: 6px;
+}
 .status-sub.timings {
   font: 11px var(--fo-font-mono);
 }

@@ -218,7 +218,28 @@ case "save":
         if !named { failures += 1 }
         check("saved region on display \(id)", read(path), before: read(before).flatMap { pixels($0, crop: crop) },
               after: read(after).flatMap { pixels($0, crop: crop) }, alpha: false, ours: "\(out)/e2e-save-mingshot.png")
+        // The .mingshot sidecar beside it (written just after the PNG, once the source window is looked up).
+        let sidecar = (path as NSString).deletingPathExtension + ".mingshot"
+        var doc: [String: Any]? = nil
+        for _ in 0..<40 {
+            if let d = read(sidecar), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { doc = j; break }
+            sleepMs(50)
+        }
+        if let doc = doc, let meta = doc["metadata"] as? [String: Any] {
+            let display = meta["display"] as? [String: Any]
+            let ok = doc["format"] as? String == "mingshot" && doc["image"] as? String == f
+                && meta["kind"] as? String == "region" && (display?["id"] as? Int) == Int(id)
+                && (meta["captured_at"] as? String)?.contains("T") == true
+            let src = meta["source"] as? [String: Any]
+            let from = src.map { "\($0["app"] as? String ?? "?") · \($0["window_title"] as? String ?? "")" } ?? "the desktop"
+            print(ok ? "PASS sidecar \"\((sidecar as NSString).lastPathComponent)\": region on display \(id), from \(from)"
+                     : "FAIL sidecar contents: \(doc)")
+            if !ok { failures += 1 }
+        } else {
+            print("FAIL no .mingshot sidecar beside the PNG"); failures += 1
+        }
         try? FileManager.default.removeItem(atPath: path)
+        try? FileManager.default.removeItem(atPath: sidecar)
     } else {
         print("FAIL nothing saved in \(folder)"); failures += 1
     }
