@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import Konva from 'konva';
-import { Arrow as KArrow, Layer, Rect as KRect, Stage, Text as KText, Transformer } from 'react-konva';
+import { Arrow as KArrow, Circle, Layer, Rect as KRect, Stage, Text as KText, Transformer } from 'react-konva';
 import {
   COLOURS,
   WIDTHS,
@@ -53,6 +53,10 @@ export default function Editor({ id }: { id: number }) {
   const [fit, setFit] = useState(1);
   const [message, setMessage] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  // The scene as last saved: Save is off until something changes (Keith, 2026-11-27).
+  const [savedScene, setSavedScene] = useState<Scene | null>(null);
+  // An arrow end being dragged (its handle), shown live and committed on release.
+  const [end, setEnd] = useState<{ id: string; which: 1 | 2; x: number; y: number } | null>(null);
   const shapesLayer = useRef<Konva.Layer>(null);
   const transformer = useRef<Konva.Transformer>(null);
   const area = useRef<HTMLDivElement>(null);
@@ -66,7 +70,10 @@ export default function Editor({ id }: { id: number }) {
     invoke<Info>('editor_doc', { id }).then((d) => {
       setInfo(d);
       setSaved(d.saved);
-      setHistory(start(Array.isArray(d.annotations) ? d.annotations : []));
+      const loaded = Array.isArray(d.annotations) ? d.annotations : [];
+      const h = start(loaded);
+      setHistory(h);
+      if (d.saved) setSavedScene(h.present);
       document.title = d.title;
     });
     invoke<ArrayBuffer | number[]>('editor_image', { id }).then((buf) => {
@@ -96,7 +103,9 @@ export default function Editor({ id }: { id: number }) {
     const tr = transformer.current;
     const layer = shapesLayer.current;
     if (!tr || !layer) return;
-    const node = selected ? layer.findOne(`#${selected}`) : null;
+    const shape = scene.find((s) => s.id === selected);
+    // Arrows get a handle on each end instead (below).
+    const node = shape && shape.kind !== 'arrow' ? layer.findOne(`#${selected}`) : null;
     tr.nodes(node ? [node] : []);
     tr.getLayer()?.batchDraw();
   }, [selected, scene]);
@@ -128,11 +137,15 @@ export default function Editor({ id }: { id: number }) {
     return url;
   };
 
+  const dirty = !saved || scene !== savedScene;
+
   const exportAs = async (action: 'copy' | 'save') => {
+    if (action === 'save' && !dirty) return;
     setSelected(null);
     try {
       const d = await invoke<Delivered>('editor_export', { id, overlay: overlay(), annotations: scene, action });
       if (d.saved) setSaved(d.saved);
+      if (action === 'save') setSavedScene(scene);
       setMessage(action === 'copy' ? 'Copied to the clipboard' : 'Saved');
     } catch (e) {
       setMessage(String(e));
@@ -208,6 +221,9 @@ export default function Editor({ id }: { id: number }) {
     const done = draft.kind === 'rect' ? normalise(draft) : draft;
     if (!tooSmall(done, 3 * scale)) change(add(scene, done));
     setDraft(null);
+    // Konva doesn't refresh where shapes can be clicked while the mouse is down (the shape was drawn mid-press),
+    // so a new shape couldn't be selected until something else redrew the layer: redraw it once it's in.
+    setTimeout(() => shapesLayer.current?.draw(), 0);
   };
 
   const finishTyping = (keep: boolean) => {
@@ -220,6 +236,18 @@ export default function Editor({ id }: { id: number }) {
       change(remove(scene, typing.id));
     }
     setTyping(null);
+  };
+
+  /** A box or text resized with the selection handles: fold the scale back into the shape. */
+  const transformEnd = (s: Shape) => (e: Konva.KonvaEventObject<Event>) => {
+    const n = e.target;
+    const [sx, sy] = [n.scaleX(), n.scaleY()];
+    n.scale({ x: 1, y: 1 });
+    if (s.kind === 'rect') {
+      change(update(scene, s.id, { x: n.x(), y: n.y(), w: Math.max(2, s.w * sx), h: Math.max(2, s.h * sy) }));
+    } else if (s.kind === 'text') {
+      change(update(scene, s.id, { x: n.x(), y: n.y(), style: { ...s.style, width: Math.max(6, s.style.width * sy) } }));
+    }
   };
 
   const dragEnd = (s: Shape) => (e: Konva.KonvaEventObject<DragEvent>) => {
@@ -239,13 +267,17 @@ export default function Editor({ id }: { id: number }) {
       onMouseDown: () => tool === 'select' && setSelected(s.id),
       onDragStart: () => setSelected(s.id),
       onDragEnd: dragEnd(s),
+      onTransformEnd: transformEnd(s),
     };
     if (s.kind === 'arrow') {
       const w = s.style.width;
+      const live = end && end.id === s.id ? end : null;
+      const [x1, y1] = live?.which === 1 ? [live.x, live.y] : [s.x1, s.y1];
+      const [x2, y2] = live?.which === 2 ? [live.x, live.y] : [s.x2, s.y2];
       return (
         <KArrow
           {...common}
-          points={[s.x1, s.y1, s.x2, s.y2]}
+          points={[x1, y1, x2, y2]}
           stroke={s.style.color}
           fill={s.style.color}
           strokeWidth={w}
@@ -287,6 +319,8 @@ export default function Editor({ id }: { id: number }) {
       />
     );
   };
+
+  const selectedShape = scene.find((s) => s.id === selected) ?? null;
 
   if (!info || !imageUrl) return <div className="editor-loading">Opening…</div>;
   const w = info.width * fit;
@@ -336,7 +370,12 @@ export default function Editor({ id }: { id: number }) {
         <button className="repeat" title="Copy the annotated image (⌘C)" onClick={() => exportAs('copy')}>
           Copy
         </button>
-        <button className="new editor-save" title="Save to Pictures › MingShot (⌘S)" onClick={() => exportAs('save')}>
+        <button
+          className="new editor-save"
+          disabled={!dirty}
+          title={dirty ? 'Save to Pictures › MingShot (⌘S)' : 'Saved: nothing new to save'}
+          onClick={() => exportAs('save')}
+        >
           Save
         </button>
       </div>
@@ -359,7 +398,46 @@ export default function Editor({ id }: { id: number }) {
               {draft && node(draft)}
             </Layer>
             <Layer>
-              <Transformer ref={transformer} resizeEnabled={false} rotateEnabled={false} borderStroke="#C9A24A" borderStrokeWidth={1.5} />
+              <Transformer
+                ref={transformer}
+                rotateEnabled={false}
+                keepRatio={selectedShape?.kind === 'text'}
+                enabledAnchors={
+                  selectedShape?.kind === 'text'
+                    ? ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+                    : ['top-left', 'top-center', 'top-right', 'middle-left', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right']
+                }
+                ignoreStroke
+                borderStroke="#C9A24A"
+                borderStrokeWidth={1.5}
+                anchorStroke="#C9A24A"
+                anchorSize={9}
+              />
+              {selectedShape?.kind === 'arrow' &&
+                tool === 'select' &&
+                ([1, 2] as const).map((which) => {
+                  const a = selectedShape;
+                  const live = end && end.id === a.id && end.which === which ? end : null;
+                  const [x, y] = live ? [live.x, live.y] : which === 1 ? [a.x1, a.y1] : [a.x2, a.y2];
+                  return (
+                    <Circle
+                      key={which}
+                      x={x}
+                      y={y}
+                      radius={6 / fit}
+                      fill="#ffffff"
+                      stroke="#C9A24A"
+                      strokeWidth={2 / fit}
+                      draggable
+                      onDragMove={(e) => setEnd({ id: a.id, which, x: e.target.x(), y: e.target.y() })}
+                      onDragEnd={(e) => {
+                        const [nx, ny] = [e.target.x(), e.target.y()];
+                        change(update(scene, a.id, which === 1 ? { x1: nx, y1: ny } : { x2: nx, y2: ny }));
+                        setEnd(null);
+                      }}
+                    />
+                  );
+                })}
             </Layer>
           </Stage>
           {typing && (

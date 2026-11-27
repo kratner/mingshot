@@ -244,6 +244,7 @@ mod app {
             EDITS.lock().unwrap().remove(&id);
             e.to_string()
         })?;
+        let app_for_close = app.clone();
         window.on_window_event(move |event| {
             if let tauri::WindowEvent::Destroyed = event {
                 // The editor's drawings (synced as they change) and save location go back to the capture they came
@@ -252,12 +253,21 @@ mod app {
                 let doc = EDITS.lock().unwrap().remove(&id);
                 if let Some(doc) = doc
                     && let Some(seq) = doc.seq
-                    && let Some(last) = LAST.lock().unwrap().as_mut().filter(|l| l.seq == seq)
                 {
-                    last.annotations = doc.annotations;
-                    if doc.saved.is_some() {
-                        last.saved = doc.saved;
+                    let saved = doc.saved.as_ref().map(|p| p.display().to_string());
+                    let count = doc.annotations.as_array().map_or(0, |a| a.len());
+                    if let Some(last) = LAST.lock().unwrap().as_mut().filter(|l| l.seq == seq) {
+                        last.annotations = doc.annotations;
+                        if doc.saved.is_some() {
+                            last.saved = doc.saved;
+                        }
                     }
+                    // The capture window stops saying "Opened in the editor" (Keith, 2026-11-27).
+                    let _ = app_for_close.emit_to(
+                        "main",
+                        "editor-closed",
+                        serde_json::json!({ "seq": seq, "saved": saved, "annotations": count }),
+                    );
                 }
             }
         });
@@ -833,6 +843,8 @@ mod app {
         repeated: bool,
         /// Where it went: the clipboard and/or a file.
         delivered: Delivered,
+        /// Which capture this is (an editor closing reports it).
+        seq: u64,
     }
 
     /// The last dragged region: its display and the rectangle in points on it (M1, "repeat last region").
@@ -945,6 +957,7 @@ mod app {
                 editing,
                 ..delivered(&last)
             },
+            seq,
         };
         *LAST.lock().unwrap() = Some(last);
         if let Some(r) = region {

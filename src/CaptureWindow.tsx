@@ -26,6 +26,10 @@ type Captured = {
   repeated: boolean;
   /** Where it went. */
   delivered: Delivered;
+  /** Which capture this is. */
+  seq: number;
+  /** Drawings kept from a closed editor. */
+  annotations?: number;
 };
 type Delivered = { copied: boolean; saved: string | null; editing?: boolean };
 /** What MingShot recorded about a capture (metadata.rs); arrives just after the capture itself. */
@@ -124,6 +128,21 @@ export default function CaptureWindow() {
         store('lastRegion', JSON.stringify(e.payload.region));
       }
     });
+    // An editor closed: this capture is no longer "open in the editor".
+    const offEditorClosed = listen<{ seq: number; saved: string | null; annotations: number }>('editor-closed', (e) =>
+      setStatus((st) =>
+        st.kind === 'copied' && st.captured.seq === e.payload.seq
+          ? {
+              ...st,
+              captured: {
+                ...st.captured,
+                annotations: e.payload.annotations,
+                delivered: { ...st.captured.delivered, editing: false, saved: e.payload.saved ?? st.captured.delivered.saved },
+              },
+            }
+          : st,
+      ),
+    );
     const offError = listen<string>('capture-error', (e) => setStatus({ kind: 'error', message: e.payload }));
     const offCancelled = listen('cancelled', () => setStatus({ kind: 'cancelled' }));
     // Re-check the permission whenever the window comes back (after a trip to System Settings).
@@ -142,6 +161,7 @@ export default function CaptureWindow() {
       offCaptured.then((f) => f());
       offCancelled.then((f) => f());
       offError.then((f) => f());
+      offEditorClosed.then((f) => f());
       offMeta.then((f) => f());
       window.removeEventListener('focus', onFocus);
     };
@@ -453,6 +473,11 @@ function StatusLine({
             <span className="tick">✓</span>{' '}
             {d.editing ? (
               <>Opened {size} px in the editor</>
+            ) : !d.copied && !d.saved ? (
+              <>
+                Captured {size} px
+                {c.annotations ? ` · ${c.annotations} drawing${c.annotations === 1 ? '' : 's'} (Edit reopens them)` : ''}
+              </>
             ) : d.copied && d.saved ? (
               <>Copied and saved {size} px</>
             ) : d.saved ? (
@@ -515,6 +540,7 @@ function demoStatus(): Status {
       region: null,
       repeated: false,
       delivered: { copied: true, saved: '/Users/you/Pictures/MingShot/MingShot 2026-11-26 at 17.42.05.png' },
+      seq: 1,
     },
   };
 }

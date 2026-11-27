@@ -38,6 +38,8 @@ async function drag(x1, y1, x2, y2) {
   await page.mouse.move(...at((x1 + x2) / 2, (y1 + y2) / 2), { steps: 4 });
   await page.mouse.move(...at(x2, y2), { steps: 4 });
   await page.mouse.up();
+  // Konva refreshes where shapes can be clicked on its next frame; a person never clicks faster than that.
+  await page.waitForTimeout(80);
 }
 let failures = 0;
 async function check(name, fn) {
@@ -123,6 +125,37 @@ await check('Copy sends the annotation layer at full size, shapes in place', asy
   assert.equal(result.deletedArrow, 0, 'the deleted arrow is gone');
   assert.ok(result.text > 200, `text drawn (alpha ${result.text})`);
   assert.equal(result.empty, 0, 'untouched areas are transparent');
+});
+
+const lastSync = () => page.evaluate(() => window.__syncs[window.__syncs.length - 1].annotations);
+
+await check('a box resizes with its corner handle', async () => {
+  await page.keyboard.press('v');
+  await page.mouse.click(...at(400, 320)); // the box's left edge
+  await drag(600, 400, 650, 440); // its bottom-right handle
+  const rect = (await lastSync()).find((a) => a.kind === 'rect');
+  assert.ok(Math.abs(rect.w - 250) < 6 && Math.abs(rect.h - 190) < 6, `box now ${rect.w}×${rect.h}`);
+});
+
+await check("an arrow's end moves with its handle", async () => {
+  await page.keyboard.press('a');
+  await drag(100, 460, 300, 460);
+  await page.keyboard.press('v');
+  await page.mouse.click(...at(200, 460));
+  await drag(300, 460, 350, 420);
+  const arrow = (await lastSync()).find((a) => a.kind === 'arrow');
+  assert.ok(Math.abs(arrow.x2 - 350) < 4 && Math.abs(arrow.y2 - 420) < 4 && Math.abs(arrow.x1 - 100) < 2, JSON.stringify(arrow));
+});
+
+await check('Save turns off once saved and back on after a change', async () => {
+  const save = page.getByRole('button', { name: 'Save', exact: true });
+  await save.click();
+  await page.waitForFunction(() => window.__exports.some((e) => e.action === 'save'));
+  await page.waitForFunction(() => document.querySelector('button.editor-save').disabled);
+  assert.match(await status(), /Saved in Pictures › MingShot/);
+  await page.keyboard.press('r');
+  await drag(500, 50, 560, 90);
+  assert.equal(await save.isDisabled(), false);
 });
 
 await check('the capture shows when binary replies come as arrays (Mojave)', async () => {

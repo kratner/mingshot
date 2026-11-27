@@ -39,9 +39,11 @@ export async function installMock(mode: string) {
       case 'editor_sync':
         syncs.push(args);
         return null;
-      case 'editor_export':
+      case 'editor_export': {
         exports.push(args);
-        return { copied: true, saved: null, editing: true };
+        const save = (args as { action: string }).action === 'save';
+        return { copied: !save, saved: save ? '/Users/you/Pictures/MingShot/MingShot mock.png' : null, editing: true };
+      }
       default:
         return null;
     }
