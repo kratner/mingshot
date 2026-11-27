@@ -230,6 +230,19 @@ All settled; tracked in kratner/planning#1 (private).
    26+ (exact shadow), `CGWindowListCreateImage` before. Screen Recording permission from 10.15 (Mojave has none).
    On the older path the overlay appears once the displays are read rather than instantly. The frontend avoids
    features Mojave's original WebKit (Safari 12) lacks: pointer events, flex `gap`, `inset`.
+10. **CLI and MCP access (Keith, 2026-11-26; across Four Ounces apps, four-ounces-brand APPS.md).** Everything
+    MingShot does should also be reachable from a script and by an AI agent. The work stays in the Rust library
+    (capture, windows, metadata, compositing), and the UI, a `mingshot` command line tool and an MCP server are all
+    thin layers over it. First sketch:
+    - CLI: `mingshot capture region|window|display [--display N] [--rect x,y,w,h] [--window <id|app>]
+      [--shadow] [--out file.png] [--copy] [--json]`, `mingshot windows`, `mingshot displays`,
+      `mingshot annotate file.mingshot --arrow …`, `mingshot export file.mingshot --out …`.
+    - MCP tools: `list_displays`, `list_windows`, `capture_region` / `capture_window` / `capture_display`
+      (returns the PNG and the metadata), `annotate` (adds shapes to a `.mingshot`), `export`.
+    - So every feature is designed with plain-data inputs and outputs: the editor's annotations are JSON, compositing
+      is in Rust, and nothing needs the UI to happen. Permissions are the app's (Screen Recording, Accessibility):
+      the CLI and MCP server ask the running app, or run as the app's own binary.
+    Not scheduled; candidate for after M2.
 
 ---
 

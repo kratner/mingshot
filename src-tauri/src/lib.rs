@@ -8,6 +8,8 @@ pub mod capture;
 pub mod compat;
 pub mod log;
 #[cfg(target_os = "macos")]
+pub mod editor;
+#[cfg(target_os = "macos")]
 pub mod metadata;
 #[cfg(target_os = "macos")]
 pub mod output;
