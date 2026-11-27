@@ -266,12 +266,28 @@ html.is-overlay body {
   border-radius: 7px 7px 0 0;
 }
 .overlay .loupe-read {
-  padding: 4px 8px 5px;
+  padding: 4px 8px 6px;
   color: #fff;
   font: 500 11px var(--fo-font-mono);
   white-space: nowrap;
 }
-.overlay .loupe-colour {
-  float: right;
-  color: rgba(255, 255, 255, 0.7);
+.overlay .loupe-row {
+  line-height: 16px;
+}
+/* Labels in a lighter tone so the numbers read as separate values (x 1698  y 490, not "1698, 490#5B3577"). */
+.overlay .loupe-key {
+  color: rgba(255, 255, 255, 0.55);
+  margin-right: 5px;
+}
+.overlay .loupe-gap {
+  margin-left: 12px;
+}
+.overlay .loupe-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.45);
 }

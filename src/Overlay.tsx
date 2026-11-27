@@ -141,8 +141,33 @@ function Loupe({ display, at, size }: { display: number; at: Pt; size: string | 
     <div className="loupe" style={{ left, top }}>
       <canvas ref={canvas} width={LOUPE_PX} height={LOUPE_PX} style={{ width: LOUPE_PX, height: LOUPE_PX }} />
       <div className="loupe-read">
-        {size ?? `${px.x}, ${px.y}`}
-        {!size && colour && <span className="loupe-colour">{colour}</span>}
+        {size ? (
+          <>
+            <div className="loupe-row">
+              <span className="loupe-key">size</span>
+              {size}
+            </div>
+            <div className="loupe-row">
+              <span className="loupe-key">x</span>
+              {px.x}
+              <span className="loupe-key loupe-gap">y</span>
+              {px.y}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="loupe-row">
+              <span className="loupe-key">x</span>
+              {px.x}
+              <span className="loupe-key loupe-gap">y</span>
+              {px.y}
+            </div>
+            <div className="loupe-row">
+              <span className="loupe-swatch" style={{ background: colour ?? 'transparent' }} />
+              {colour ?? '—'}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
