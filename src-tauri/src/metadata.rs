@@ -60,7 +60,7 @@ pub fn now_iso() -> String {
         &NSString::from_str("en_US_POSIX"),
     )));
     f.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd'T'HH:mm:ssXXXXX")));
-    f.stringFromDate(&NSDate::now()).to_string()
+    f.stringFromDate(&NSDate::date()).to_string()
 }
 
 /// The frontmost ordinary window (layer 0) containing `p` (global points), from a front-to-back list.

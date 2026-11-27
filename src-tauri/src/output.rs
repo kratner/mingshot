@@ -38,7 +38,7 @@ pub fn base_name() -> String {
         &NSString::from_str("en_US_POSIX"),
     )));
     f.setDateFormat(Some(&NSString::from_str("yyyy-MM-dd 'at' HH.mm.ss")));
-    format!("MingShot {}", f.stringFromDate(&NSDate::now()))
+    format!("MingShot {}", f.stringFromDate(&NSDate::date()))
 }
 
 /// `dir/base.png`, or `dir/base (2).png`, `(3)`… if that's taken.

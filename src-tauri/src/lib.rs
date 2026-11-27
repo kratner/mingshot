@@ -1165,6 +1165,11 @@ mod app {
 
     pub fn run() {
         use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
+        // If MingShot ever goes down (on an older macOS, a missing method is the usual cause), the reason is the last
+        // line of ~/Library/Logs/MingShot/mingshot.log.
+        std::panic::set_hook(Box::new(|info| {
+            log::event(&format!("crash: {info}"));
+        }));
         let hotkey = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Digit2);
         // Repeat the last region (M1).
         let repeat_key = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Digit3);
