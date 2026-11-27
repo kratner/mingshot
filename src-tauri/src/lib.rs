@@ -608,6 +608,12 @@ mod app {
         })
     }
 
+    /// A line in the event log from an overlay (diagnosing input on older WebKit; never content).
+    #[tauri::command]
+    fn overlay_note(note: String) {
+        log::event(&format!("overlay: {}", note.chars().take(200).collect::<String>()));
+    }
+
     /// Side of the magnifier's patch, in device pixels (odd, so one pixel is the centre).
     const LOUPE: usize = 15;
 
@@ -765,6 +771,7 @@ mod app {
                 finish_display_capture,
                 set_mode,
                 loupe,
+                overlay_note,
                 cancel_capture,
                 e2e_selection,
                 permission,

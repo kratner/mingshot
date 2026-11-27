@@ -27,6 +27,11 @@ assert.deepEqual(dragEnd(o, { x: 500, y: 120 }, none, 1, 2), { x: 500, y: 300 })
 assert.deepEqual(nudgeFor('ArrowLeft', false), { x: -1, y: 0 });
 assert.deepEqual(nudgeFor('ArrowDown', true), { x: 0, y: 10 });
 assert.equal(nudgeFor('a', false), null);
+// Older WebKit: "Left" names, or only key codes.
+assert.deepEqual(nudgeFor('Left', false), { x: -1, y: 0 });
+assert.deepEqual(nudgeFor('Unidentified', true, 38), { x: 0, y: -10 });
+assert.deepEqual(nudgeFor('', false, 39), { x: 1, y: 0 });
+assert.equal(nudgeFor('a', false, 65), null);
 
 assert.equal(hex(201, 162, 74), '#C9A24A');
 assert.equal(hex(0, 15, 255), '#000FFF');

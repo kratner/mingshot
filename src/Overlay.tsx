@@ -247,7 +247,11 @@ export default function Overlay({ display }: { display: number }) {
         return;
       }
       if (!dragFrom.current) return;
-      const step = nudgeFor(e.key, e.altKey);
+      const step = nudgeFor(e.key || '', e.altKey, e.keyCode);
+      // Diagnosis for older WebKit (Keith, 2026-11-26: arrows didn't nudge on Mojave): the key's name and code only.
+      invoke('overlay_note', {
+        note: `drag key: key=${e.key} code=${e.code} keyCode=${e.keyCode} alt=${e.altKey} shift=${e.shiftKey} used=${!!step}`,
+      }).catch(() => {});
       if (step) {
         e.preventDefault();
         nudge.current = { x: nudge.current.x + step.x, y: nudge.current.y + step.y };
@@ -283,8 +287,9 @@ export default function Overlay({ display }: { display: number }) {
       dragFrom.current = { x: r.x, y: r.y };
       setTimeout(() => finishDrag({ x: r.x + r.w, y: r.y + r.h }), 350);
     });
-    window.addEventListener('keydown', onKey);
-    window.addEventListener('keyup', onKeyUp);
+    // Capture phase on the document: seen before any element can stop it, mid-drag included.
+    document.addEventListener('keydown', onKey, true);
+    document.addEventListener('keyup', onKeyUp, true);
     window.addEventListener('blur', onBlur);
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
@@ -292,8 +297,8 @@ export default function Overlay({ display }: { display: number }) {
       offTargets.then((f) => f());
       offThawed.then((f) => f());
       offE2e.then((f) => f());
-      window.removeEventListener('keydown', onKey);
-      window.removeEventListener('keyup', onKeyUp);
+      document.removeEventListener('keydown', onKey, true);
+      document.removeEventListener('keyup', onKeyUp, true);
       window.removeEventListener('blur', onBlur);
       window.removeEventListener('mousemove', move);
       window.removeEventListener('mouseup', up);

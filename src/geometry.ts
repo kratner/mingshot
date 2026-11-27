@@ -44,17 +44,24 @@ export function dragEnd(from: Pt, pointer: Pt, nudge: Pt, dpr: number, ratio: nu
   return { x, y };
 }
 
-/** Arrow keys mid-drag: one device pixel, ten with Option. Null for any other key. */
-export function nudgeFor(key: string, alt: boolean): Pt | null {
+/**
+ * Arrow keys mid-drag: one device pixel, ten with Option. Null for any other key. Recognises the arrow by `key`
+ * ("ArrowLeft", or the older "Left") or, failing that, by `keyCode` (37–40), since WebKit versions differ (Mojave's
+ * original Safari 12 among them).
+ */
+export function nudgeFor(key: string, alt: boolean, keyCode = 0): Pt | null {
   const step = alt ? 10 : 1;
-  switch (key) {
-    case 'ArrowLeft':
+  const name = key.replace(/^Arrow/, '') || '';
+  const byCode: Record<number, string> = { 37: 'Left', 38: 'Up', 39: 'Right', 40: 'Down' };
+  const dir = ['Left', 'Right', 'Up', 'Down'].indexOf(name) >= 0 ? name : byCode[keyCode];
+  switch (dir) {
+    case 'Left':
       return { x: -step, y: 0 };
-    case 'ArrowRight':
+    case 'Right':
       return { x: step, y: 0 };
-    case 'ArrowUp':
+    case 'Up':
       return { x: 0, y: -step };
-    case 'ArrowDown':
+    case 'Down':
       return { x: 0, y: step };
     default:
       return null;
