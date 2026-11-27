@@ -16,4 +16,5 @@ npm run app          # build MingShot.app (signed with the "MingDesk Dev" cert i
 npm run selftest     # pixel comparison with screencapture
 ```
 
-Placeholder icons are MingDesk's until MingShot has its own.
+Icon: capture corners framing a sun (明 "bright") on teal, from the Four Ounces product icon kit
+(`branding/mingshot.svg`; `npm run icons` rebuilds every size).
