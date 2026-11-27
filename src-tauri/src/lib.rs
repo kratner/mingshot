@@ -1088,6 +1088,15 @@ mod app {
 
     // ---- Bench mode (MINGSHOT_BENCH=<runs>): docs/M0.md ------------------------------------------------------
 
+    /// A test run (e2e or bench): the capture window doesn't save settings or the last region, so tests never leave
+    /// anything behind in the real app's storage.
+    #[tauri::command]
+    fn test_run() -> bool {
+        ["MINGSHOT_BENCH", "MINGSHOT_E2E_MODE", "MINGSHOT_E2E_SELECT", "MINGSHOT_E2E_AFTER"]
+            .iter()
+            .any(|k| std::env::var(k).is_ok())
+    }
+
     #[tauri::command]
     fn bench_runs() -> u32 {
         std::env::var("MINGSHOT_BENCH")
@@ -1223,6 +1232,7 @@ mod app {
                 permission,
                 request_permission,
                 bench_runs,
+                test_run,
                 bench_opaque,
                 bench_check,
                 bench_control,

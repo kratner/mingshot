@@ -182,6 +182,9 @@ button.new {
   font-weight: 600;
   color: var(--fo-text-2);
 }
+.ax-on {
+  color: var(--fo-success);
+}
 button.link.quiet {
   color: var(--fo-muted);
   margin-left: 6px;

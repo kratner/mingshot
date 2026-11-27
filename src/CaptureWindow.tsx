@@ -52,12 +52,19 @@ function stored(key: string): string | null {
     return null;
   }
 }
+/// Test runs (e2e, bench) share this storage with the real app on the same Mac, so they never write to it: a test's
+/// region once showed up as the user's "last region" (Keith, 2026-11-26).
+const testRun: Promise<boolean> = invoke<boolean>('test_run').catch(() => false);
+
 function store(key: string, value: string) {
-  try {
-    localStorage.setItem(`mingshot.${key}`, value);
-  } catch {
-    /* private storage unavailable: settings just aren't remembered */
-  }
+  testRun.then((test) => {
+    if (test) return;
+    try {
+      localStorage.setItem(`mingshot.${key}`, value);
+    } catch {
+      /* private storage unavailable: settings just aren't remembered */
+    }
+  });
 }
 
 type Status =
@@ -295,6 +302,12 @@ const HINTS: Record<Mode, string> = {
 /// Where the capture came from: app and window title, and the page or file when MingShot may ask (Accessibility).
 function SourceLine({ meta, axAllowed, onAllow }: { meta: Meta; axAllowed: boolean; onAllow: () => void }) {
   const src = meta.source!;
+  // Remember that the permission was missing for this capture, so granting it says so instead of the link just
+  // disappearing (Keith, 2026-11-26).
+  const [askedFor, setAskedFor] = useState(!axAllowed);
+  useEffect(() => {
+    if (!axAllowed) setAskedFor(true);
+  }, [axAllowed]);
   const where = src.url ?? (src.file_path ? fileName(src.file_path) : null);
   return (
     <div className="status-sub source" title={[src.app, src.window_title, src.url ?? src.file_path].filter(Boolean).join('\n')}>
@@ -308,6 +321,9 @@ function SourceLine({ meta, axAllowed, onAllow }: { meta: Meta; axAllowed: boole
             Add web addresses and file paths…
           </button>
         </>
+      )}
+      {!where && axAllowed && askedFor && (
+        <span className="ax-on"> · Web addresses and file paths: on, from the next capture</span>
       )}
     </div>
   );
