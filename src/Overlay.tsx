@@ -24,7 +24,7 @@ type Mode = 'region' | 'window' | 'display';
 type Target = Sel & { id: number; app: string; title: string };
 type Targets = { mode: Mode; windows: Target[] };
 /// What a click would take now: a window, or the whole display.
-type Hover = { rect: Sel; label: string; window?: number };
+type Hover = { rect: Sel; app: string; title: string; window?: number };
 
 const snap = (v: number) => snapAt(v, devicePixelRatio);
 const rectOf = (a: Pt, b: Pt) => rectOfAt(a, b, devicePixelRatio);
@@ -33,11 +33,11 @@ const rectOf = (a: Pt, b: Pt) => rectOfAt(a, b, devicePixelRatio);
 const CLICK_SLOP = 4;
 
 function hoverAt(t: Targets, p: Pt | null): Hover | null {
-  if (t.mode === 'display') return { rect: { x: 0, y: 0, w: innerWidth, h: innerHeight }, label: 'This display' };
+  if (t.mode === 'display') return { rect: { x: 0, y: 0, w: innerWidth, h: innerHeight }, app: 'This display', title: '' };
   if (t.mode !== 'window' || !p) return null;
   const w = t.windows.find((w) => p.x >= w.x && p.x < w.x + w.w && p.y >= w.y && p.y < w.y + w.h);
   if (!w) return null;
-  return { rect: w, label: w.title ? `${w.app} — ${w.title}` : w.app, window: w.id };
+  return { rect: w, app: w.app, title: w.title, window: w.id };
 }
 
 /// The part of `r` on this display.
@@ -62,13 +62,6 @@ function Shades({ r }: { r: Sel }) {
 
 function Highlight({ r }: { r: Sel }) {
   return <div className="highlight" style={{ left: r.x, top: r.y, width: r.w, height: r.h }} />;
-}
-
-/// A label just under `r` (or above it near the bottom of the display, or inside it when it fills the display).
-function labelTop(r: Sel) {
-  if (r.y + r.h + 30 <= innerHeight) return r.y + r.h + 6;
-  if (r.y >= 30) return r.y - 26;
-  return r.y + 10;
 }
 
 /// Side of the magnifier's patch in device pixels (matches LOUPE in lib.rs), and how much it's enlarged.
@@ -334,20 +327,40 @@ export default function Overlay({ display }: { display: number }) {
         <>
           <Shades r={clip(hover.rect)} />
           <Highlight r={clip(hover.rect)} />
-          <div className="size" style={{ left: clip(hover.rect).x + 8, top: labelTop(clip(hover.rect)) }}>
-            {hover.label} · {Math.round(hover.rect.w * dpr)} × {Math.round(hover.rect.h * dpr)}
-          </div>
+          {hover.window != null ? (
+            // Window mode: a tag on the window's top-left corner (inside it when the window is at the very top).
+            <div
+              className="target-tag"
+              style={{ left: clip(hover.rect).x, top: clip(hover.rect).y >= 30 ? clip(hover.rect).y - 28 : clip(hover.rect).y + 6 }}
+            >
+              <strong>{hover.app}</strong>
+              {hover.title && <span className="target-title">{hover.title}</span>}
+              <span className="target-size">
+                {Math.round(hover.rect.w * dpr)} × {Math.round(hover.rect.h * dpr)}
+              </span>
+            </div>
+          ) : (
+            // Display mode: one card in the middle; the whole display is what a click takes.
+            <div className="display-card">
+              <strong>This display</strong>
+              <span className="target-size">
+                {Math.round(innerWidth * dpr)} × {Math.round(innerHeight * dpr)} px
+              </span>
+              <div className="display-hint">Click to capture · drag for a region · Esc cancels</div>
+            </div>
+          )}
         </>
       ) : (
         <div className="dim" />
       )}
-      {!sel && !hover && pointer && (
+      {!sel && !hover && targets.mode === 'region' && pointer && (
         <>
           <div className="cross-h" style={{ top: snap(pointer.y) }} />
           <div className="cross-v" style={{ left: snap(pointer.x) }} />
         </>
       )}
-      {(end ?? pointer) && !bench && (
+      {/* The magnifier is for placing edges: always in region mode, and in the other modes once a drag starts. */}
+      {(end ?? pointer) && !bench && (targets.mode === 'region' || sel) && (
         <Loupe
           display={display}
           at={sel && end ? end : (pointer as Pt)}
