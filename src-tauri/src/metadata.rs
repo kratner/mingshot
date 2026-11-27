@@ -22,9 +22,12 @@ pub struct Meta {
     /// What was captured, in the display's points and pixels (for a window: its frame).
     pub area_points: Rect,
     pub area_pixels: Rect,
-    /// The window the capture came from: the window captured, or the frontmost window under the region's centre
-    /// (or, for a display, its frontmost window). None over the bare desktop.
+    /// The main source: the window that covers most of the capture (for a window capture, that window). None
+    /// over the bare desktop.
     pub source: Option<Source>,
+    /// Every window visible in the capture, most coverage first (Keith, 2026-11-26: "record every window in the
+    /// selection"). A window hidden behind others inside the capture isn't listed.
+    pub windows: Vec<WindowEntry>,
     pub app_version: String,
 }
 
@@ -50,6 +53,79 @@ pub struct Source {
     pub pid: i32,
     #[serde(skip)]
     pub window_id: u32,
+}
+
+/// One window seen in a capture.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct WindowEntry {
+    #[serde(flatten)]
+    pub source: Source,
+    /// Share of the capture where this window is what shows (0 to 1).
+    pub coverage: f64,
+    /// The window's frame, in points relative to the capture's display.
+    pub frame_points: Rect,
+}
+
+/// The windows visible in `area` (global points), frontmost wins at each point, with the share of the area each
+/// shows in, most first. Sampled on a grid of at most 96×96 points, so it's quick and exact enough for "which
+/// windows, roughly how much of each".
+pub fn visible_windows(windows: &[WindowInfo], area: Rect) -> Vec<(WindowInfo, f64)> {
+    if area.w <= 0.0 || area.h <= 0.0 {
+        return Vec::new();
+    }
+    let nx = ((area.w / 2.0).ceil() as usize).clamp(1, 96);
+    let ny = ((area.h / 2.0).ceil() as usize).clamp(1, 96);
+    let mut counts: Vec<usize> = vec![0; windows.len()];
+    for j in 0..ny {
+        let y = area.y + (j as f64 + 0.5) * area.h / ny as f64;
+        for i in 0..nx {
+            let x = area.x + (i as f64 + 0.5) * area.w / nx as f64;
+            let front = windows.iter().position(|w| {
+                x >= w.bounds.x
+                    && x < w.bounds.x + w.bounds.w
+                    && y >= w.bounds.y
+                    && y < w.bounds.y + w.bounds.h
+            });
+            if let Some(k) = front {
+                counts[k] += 1;
+            }
+        }
+    }
+    let total = (nx * ny) as f64;
+    let mut out: Vec<(WindowInfo, f64)> = windows
+        .iter()
+        .zip(counts)
+        .filter(|(_, n)| *n > 0)
+        .map(|(w, n)| (w.clone(), n as f64 / total))
+        .collect();
+    out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    out
+}
+
+/// Looks up every window's details (in parallel: each app may take up to ⅓ s), keeping the order.
+pub fn sources(windows: &[(WindowInfo, f64)], origin: (f64, f64)) -> Vec<WindowEntry> {
+    let found: Vec<Source> = std::thread::scope(|scope| {
+        let jobs: Vec<_> = windows
+            .iter()
+            .take(16)
+            .map(|(w, _)| scope.spawn(move || source(w)))
+            .collect();
+        jobs.into_iter().filter_map(|j| j.join().ok()).collect()
+    });
+    found
+        .into_iter()
+        .zip(windows)
+        .map(|(source, (w, coverage))| WindowEntry {
+            source,
+            coverage: (coverage * 1000.0).round() / 1000.0,
+            frame_points: Rect {
+                x: w.bounds.x - origin.0,
+                y: w.bounds.y - origin.1,
+                w: w.bounds.w,
+                h: w.bounds.h,
+            },
+        })
+        .collect()
 }
 
 /// The current local time as ISO 8601 with offset.
@@ -104,8 +180,12 @@ pub fn classify(value: &str) -> (Option<String>, Option<String>) {
     if value.starts_with("http://") || value.starts_with("https://") {
         (Some(value.to_string()), None)
     } else if let Some(rest) = value.strip_prefix("file://") {
-        let path = rest.strip_prefix("localhost").unwrap_or(rest);
-        (None, Some(percent_decode(path)))
+        let path = percent_decode(rest.strip_prefix("localhost").unwrap_or(rest));
+        // Electron apps (Claude, Orca, VS Code…) report their own page inside the app bundle: not a document.
+        if path.contains(".app/Contents/") || path.contains(".asar/") {
+            return (None, None);
+        }
+        (None, Some(path))
     } else {
         (None, None)
     }
@@ -352,6 +432,64 @@ mod tests {
     }
 
     #[test]
+    fn every_visible_window_in_the_area_with_its_share() {
+        // Two windows side by side, a third entirely behind the first (front to back), a fourth outside.
+        let list = vec![
+            win(1, 0, 0.0, 0.0, 100.0, 100.0),
+            win(2, 0, 100.0, 0.0, 100.0, 100.0),
+            win(3, 0, 10.0, 10.0, 50.0, 50.0),
+            win(4, 0, 500.0, 500.0, 50.0, 50.0),
+        ];
+        let seen = visible_windows(
+            &list,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 200.0,
+                h: 100.0,
+            },
+        );
+        let ids: Vec<u32> = seen.iter().map(|(w, _)| w.id).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&1) && ids.contains(&2), "{ids:?}");
+        for (_, share) in &seen {
+            assert!((share - 0.5).abs() < 0.02, "{share}");
+        }
+        // Partly covered: window 2 behind window 1 shows only where 1 isn't.
+        let list = vec![
+            win(1, 0, 0.0, 0.0, 150.0, 100.0),
+            win(2, 0, 0.0, 0.0, 200.0, 100.0),
+        ];
+        let seen = visible_windows(
+            &list,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 200.0,
+                h: 100.0,
+            },
+        );
+        assert_eq!(seen[0].0.id, 1);
+        assert!(
+            (seen[0].1 - 0.75).abs() < 0.02 && (seen[1].1 - 0.25).abs() < 0.02,
+            "{seen:?}"
+        );
+        // Bare desktop: nothing.
+        assert!(
+            visible_windows(
+                &list,
+                Rect {
+                    x: 300.0,
+                    y: 300.0,
+                    w: 10.0,
+                    h: 10.0
+                }
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn documents_are_addresses_or_paths() {
         assert_eq!(
             classify("https://example.com/a?b=1"),
@@ -366,6 +504,11 @@ mod tests {
             (None, Some("/tmp/x.png".into()))
         );
         assert_eq!(classify("about:blank"), (None, None));
+        // An Electron app's own page is not a document.
+        assert_eq!(
+            classify("file:///Applications/Claude.app/Contents/Resources/app.asar/.vite/renderer/main_window/index.html"),
+            (None, None)
+        );
     }
 
     #[test]
@@ -407,6 +550,7 @@ mod tests {
                 h: 8.0,
             },
             source: None,
+            windows: Vec::new(),
             app_version: "0.0.1".into(),
         };
         let path = write_sidecar(&png, &meta).unwrap();

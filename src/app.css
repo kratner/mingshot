@@ -182,6 +182,11 @@ button.new {
   font-weight: 600;
   color: var(--fo-text-2);
 }
+.status-sub .more {
+  color: var(--fo-text-2);
+  text-decoration: underline dotted;
+  cursor: help;
+}
 .detail-key {
   font: 600 10px var(--fo-font-text);
   letter-spacing: 0.05em;

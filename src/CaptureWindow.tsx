@@ -29,16 +29,20 @@ type Captured = {
 };
 type Delivered = { copied: boolean; saved: string | null };
 /** What MingShot recorded about a capture (metadata.rs); arrives just after the capture itself. */
+type Source = {
+  app: string;
+  bundle_id: string | null;
+  window_title: string;
+  url: string | null;
+  file_path: string | null;
+};
 type Meta = {
   captured_at: string;
   kind: string;
-  source: {
-    app: string;
-    bundle_id: string | null;
-    window_title: string;
-    url: string | null;
-    file_path: string | null;
-  } | null;
+  /** The window covering most of the capture. */
+  source: Source | null;
+  /** Every window visible in the capture, most coverage first. */
+  windows: (Source & { coverage: number })[];
 };
 type After = 'copy' | 'save' | 'both';
 
@@ -316,8 +320,16 @@ function SourceLine({ meta, axAllowed, onAllow }: { meta: Meta; axAllowed: boole
   useEffect(() => {
     if (!axAllowed) setAskedFor(true);
   }, [axAllowed]);
+  const others = meta.windows.slice(1);
+  // Hover: every window in the capture, with its share of it.
+  const title = meta.windows
+    .map(
+      (w) =>
+        `${Math.round(w.coverage * 100)}%  ${w.app}${w.window_title ? ' · ' + w.window_title : ''}${w.url ? ' · ' + w.url : w.file_path ? ' · ' + w.file_path : ''}`,
+    )
+    .join('\n');
   return (
-    <div className="status-sub source" title={[src.app, src.window_title, src.url ?? src.file_path].filter(Boolean).join('\n')}>
+    <div className="status-sub source" title={title}>
       from <strong>{src.app}</strong>
       {src.window_title && <> · {src.window_title}</>}
       {src.url && (
@@ -331,6 +343,12 @@ function SourceLine({ meta, axAllowed, onAllow }: { meta: Meta; axAllowed: boole
           {' '}
           · <span className="detail-key">file</span> {fileName(src.file_path)}
         </>
+      )}
+      {others.length > 0 && (
+        <span className="more">
+          {' '}
+          and {others.length} more window{others.length > 1 ? 's' : ''}
+        </span>
       )}
       {!src.url && !src.file_path && !axAllowed && (
         <>

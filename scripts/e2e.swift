@@ -230,9 +230,10 @@ case "save":
             let ok = doc["format"] as? String == "mingshot" && doc["image"] as? String == f
                 && meta["kind"] as? String == "region" && (display?["id"] as? Int) == Int(id)
                 && (meta["captured_at"] as? String)?.contains("T") == true
+            let wins = meta["windows"] as? [[String: Any]] ?? []
             let src = meta["source"] as? [String: Any]
             let from = src.map { "\($0["app"] as? String ?? "?") · \($0["window_title"] as? String ?? "")" } ?? "the desktop"
-            print(ok ? "PASS sidecar \"\((sidecar as NSString).lastPathComponent)\": region on display \(id), from \(from)"
+            print(ok ? "PASS sidecar \"\((sidecar as NSString).lastPathComponent)\": region on display \(id), from \(from), \(wins.count) window(s) recorded"
                      : "FAIL sidecar contents: \(doc)")
             if !ok { failures += 1 }
         } else {

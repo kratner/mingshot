@@ -95,7 +95,8 @@ mod app {
         /// In the display's points (relative to its top-left corner) and pixels.
         area_points: Rect,
         area_pixels: Rect,
-        window: Option<crate::windows::WindowInfo>,
+        /// The windows visible in the capture with their share of it, most first.
+        windows: Vec<(crate::windows::WindowInfo, f64)>,
     }
 
     impl MetaCtx {
@@ -113,9 +114,32 @@ mod app {
                 },
                 area_points: self.area_points,
                 area_pixels: self.area_pixels,
-                source: self.window.as_ref().map(crate::metadata::source),
+                source: None,
+                windows: crate::metadata::sources(&self.windows, (d.bounds.x, d.bounds.y)),
                 app_version: env!("CARGO_PKG_VERSION").to_string(),
             }
+            .with_main_source()
+        }
+    }
+
+    /// The window the capture is captioned "from": the one covering most of it.
+    trait MainSource {
+        fn with_main_source(self) -> Self;
+    }
+    impl MainSource for crate::metadata::Meta {
+        fn with_main_source(mut self) -> Self {
+            self.source = self.windows.first().map(|w| w.source.clone());
+            self
+        }
+    }
+
+    /// The capture's area in global points.
+    fn global(d: &capture::Display, r: Rect) -> Rect {
+        Rect {
+            x: d.bounds.x + r.x,
+            y: d.bounds.y + r.y,
+            w: r.w,
+            h: r.h,
         }
     }
 
@@ -697,17 +721,13 @@ mod app {
         let (captured_at, windows) = session_context();
         let timings = end_session(app);
         let d = frame.display;
-        let centre = (
-            d.bounds.x + sel.x + sel.w / 2.0,
-            d.bounds.y + sel.y + sel.h / 2.0,
-        );
         let ctx = MetaCtx {
             captured_at,
             kind: "region",
             display: d,
             area_points: sel,
             area_pixels: pixel_rect(&d, sel),
-            window: crate::metadata::window_at(&windows, centre).cloned(),
+            windows: crate::metadata::visible_windows(&windows, global(&d, sel)),
         };
         deliver(
             app,
@@ -734,26 +754,14 @@ mod app {
             w: d.bounds.w,
             h: d.bounds.h,
         };
-        // The source of a whole display: its frontmost ordinary window.
-        let b = d.bounds;
-        let window = windows
-            .iter()
-            .find(|w| {
-                let r = w.bounds;
-                w.layer == 0
-                    && r.x < b.x + b.w
-                    && r.x + r.w > b.x
-                    && r.y < b.y + b.h
-                    && r.y + r.h > b.y
-            })
-            .cloned();
+        // Every window visible on the display.
         let ctx = MetaCtx {
             captured_at,
             kind: "display",
             display: d,
             area_points: whole,
             area_pixels: pixel_rect(&d, whole),
-            window,
+            windows: crate::metadata::visible_windows(&windows, d.bounds),
         };
         deliver(
             app,
@@ -828,7 +836,8 @@ mod app {
             display,
             area_points: frame_on_display,
             area_pixels,
-            window,
+            // The window captured is the whole picture.
+            windows: window.map(|w| vec![(w, 1.0)]).unwrap_or_default(),
         };
         deliver(app, result, t, timings, "window", None, false, ctx)
     }
@@ -871,14 +880,13 @@ mod app {
             .or_else(|| capture::displays().first().copied())
             .ok_or("no displays")?;
         let r = last.rect;
-        let centre = (d.bounds.x + r.x + r.w / 2.0, d.bounds.y + r.y + r.h / 2.0);
         let ctx = MetaCtx {
             captured_at,
             kind: "region",
             display: d,
             area_points: r,
             area_pixels: pixel_rect(&d, r),
-            window: crate::metadata::window_at(&windows, centre).cloned(),
+            windows: crate::metadata::visible_windows(&windows, global(&d, r)),
         };
         deliver(
             app,
@@ -1092,9 +1100,14 @@ mod app {
     /// anything behind in the real app's storage.
     #[tauri::command]
     fn test_run() -> bool {
-        ["MINGSHOT_BENCH", "MINGSHOT_E2E_MODE", "MINGSHOT_E2E_SELECT", "MINGSHOT_E2E_AFTER"]
-            .iter()
-            .any(|k| std::env::var(k).is_ok())
+        [
+            "MINGSHOT_BENCH",
+            "MINGSHOT_E2E_MODE",
+            "MINGSHOT_E2E_SELECT",
+            "MINGSHOT_E2E_AFTER",
+        ]
+        .iter()
+        .any(|k| std::env::var(k).is_ok())
     }
 
     #[tauri::command]

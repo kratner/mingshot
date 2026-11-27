@@ -94,6 +94,11 @@ tools work on a canvas)
     **Copy with my settings** (a second button beside Copy) or **⌥⌘C** repeats it without opening the panel;
     on a canvas **⌥⌘V** pastes with the same saved set. ⌘C stays image only either way. The shortcuts are
     changeable in settings.
+- **Every window in a capture (Keith, 2026-11-26):** a capture records every window visible in it (app, bundle id,
+  title, page or file, frame, and its share of the capture), most first; the largest is the one it's "from".
+- **Preferences for metadata (idea, Keith 2026-11-26):** a MingShot preferences pane to choose which kinds of
+  metadata are recorded and how much (e.g. app and title only; plus page addresses and file paths; plus every
+  window; plus display details), alongside the copy/paste choices of §7.8. Not built yet.
 - **On a canvas:** each pasted image keeps its own metadata, shown in an inspector; its caption can be toggled;
   a "Sources" list (every image's app, title and URL) can be added to the canvas or the export.
 
