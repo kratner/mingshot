@@ -125,10 +125,9 @@ pub fn prepare_ui(win: &NSWindow) {
 /// Puts the selection UI over each display (already prepared: `prepare_ui`), then makes MingShot the active app and
 /// the overlay under the pointer (`key`) the key window, so Esc reaches it. The overlay is handed to the window
 /// server (CATransaction flush) before the focus change; the screen shows it on its next refresh.
-pub fn show_ui(mtm: MainThreadMarker, ui: &[(u32, &NSWindow)], key: Option<u32>) {
+pub fn show_ui(mtm: MainThreadMarker, ui: &[(u32, &NSWindow)]) {
     let t = std::time::Instant::now();
     let screens = screen_frames(mtm);
-    let mut key_window = None;
     for (display, win) in ui {
         if let Some(rect) = screens.get(display)
             && win.frame() != *rect
@@ -138,27 +137,29 @@ pub fn show_ui(mtm: MainThreadMarker, ui: &[(u32, &NSWindow)], key: Option<u32>)
         win.setIgnoresMouseEvents(false);
         win.setAlphaValue(1.0);
         win.orderFrontRegardless();
-        if Some(*display) == key {
-            key_window = Some(*win);
-        }
     }
-    // On screen first: the flush hands the overlay to the window server, and nothing else is waited on.
+    // On screen now; focus comes later (`focus`).
     CATransaction::flush();
     let t_shown = t.elapsed();
-    // Then focus, so Esc reaches the overlay under the pointer. Activating is a handshake with the app that was
-    // active, which can take ~500 ms; done before the flush, it held the overlay back by that much in a few runs in
-    // ten (docs/M0.md). Activate before making the window key, or AppKit hands key status back to whichever
-    // MingShot window had it.
+    if t_shown.as_millis() > 40 {
+        crate::log::event(&format!("slow show_ui: on screen after {t_shown:?}"));
+    }
+}
+
+/// Makes MingShot the active app and the overlay under the pointer the key window, so Esc and the arrow keys reach
+/// it. Called only once every display has been read: activating changes how other apps draw (their windows go
+/// inactive, the menu bar becomes MingShot's), and a capture taken after that would show them inactive (e2e,
+/// 2026-11-26). Activate before making the window key, or AppKit hands key status back to whichever MingShot window
+/// had it.
+pub fn focus(mtm: MainThreadMarker, ui: &[(u32, &NSWindow)], key: Option<u32>) {
     let app = NSApplication::sharedApplication(mtm);
     if !app.isActive() {
         #[allow(deprecated)]
         app.activateIgnoringOtherApps(true);
     }
-    if let Some(win) = key_window.or(ui.first().map(|(_, w)| *w)) {
+    let key_window = ui.iter().find(|(d, _)| Some(*d) == key).or(ui.first());
+    if let Some((_, win)) = key_window {
         win.makeKeyAndOrderFront(None);
-    }
-    if t_shown.as_millis() > 40 {
-        crate::log::event(&format!("slow show_ui: on screen after {t_shown:?}"));
     }
 }
 

@@ -281,7 +281,8 @@ export default function Overlay({ display }: { display: number }) {
     const offE2e = listen<Sel>('e2e-select', (e) => {
       const r = e.payload;
       dragFrom.current = { x: r.x, y: r.y };
-      setTimeout(() => finishDrag({ x: r.x + r.w, y: r.y + r.h }), 350);
+      // After the displays are read and the overlay has focus (e2e's Esc check comes at 450 ms, before this).
+      setTimeout(() => finishDrag({ x: r.x + r.w, y: r.y + r.h }), 700);
     });
     // Capture phase on the document: seen before any element can stop it, mid-drag included.
     document.addEventListener('keydown', onKey, true);

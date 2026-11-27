@@ -321,7 +321,7 @@ mod app {
                 .iter()
                 .filter_map(|(id, w)| ns_window(w).map(|n| (*id, n)))
                 .collect();
-            overlay::show_ui(mtm, &ui, key);
+            overlay::show_ui(mtm, &ui);
             key
         })?;
         let ui_ms = ms(t0);
@@ -388,6 +388,22 @@ mod app {
             let windows = overlay_windows(&a);
             let ui: Vec<&NSWindow> = windows.iter().filter_map(ns_window).collect();
             overlay::make_shareable(&ui);
+        })?;
+        // Every display is read: now MingShot may take focus (see overlay::focus).
+        let a = app.clone();
+        on_main(app, move |mtm| {
+            if !current(id) {
+                return;
+            }
+            let windows: Vec<(u32, tauri::WebviewWindow)> = overlay_windows(&a)
+                .into_iter()
+                .filter_map(|w| w.label().trim_start_matches("overlay-").parse().ok().map(|d| (d, w)))
+                .collect();
+            let ui: Vec<(u32, &NSWindow)> = windows
+                .iter()
+                .filter_map(|(id, w)| ns_window(w).map(|n| (*id, n)))
+                .collect();
+            overlay::focus(mtm, &ui, key);
         })?;
         let all_ms = ms(t0);
         let timings = Timings {
