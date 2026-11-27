@@ -15,9 +15,9 @@
       {
         "label": "main",
         "title": "MingShot",
-        "width": 860,
+        "width": 1000,
         "height": 168,
-        "minWidth": 820,
+        "minWidth": 960,
         "minHeight": 120,
         "resizable": true,
         "visible": false,

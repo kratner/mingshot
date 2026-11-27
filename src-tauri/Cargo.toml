@@ -20,6 +20,8 @@ tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 png = "0.18"
+base64 = "0.22"
+tauri-plugin-dialog = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # catch-all: an Objective-C exception (e.g. a method this macOS doesn't have) becomes a Rust panic with its message,

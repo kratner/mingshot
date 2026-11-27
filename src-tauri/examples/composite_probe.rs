@@ -15,19 +15,31 @@ fn main() {
             let mut enc = png::Encoder::new(&mut out, w, h);
             enc.set_color(png::ColorType::Rgba);
             enc.set_depth(png::BitDepth::Eight);
-            enc.write_header().unwrap().write_image_data(&vec![0u8; (w * h * 4) as usize]).unwrap();
+            enc.write_header()
+                .unwrap()
+                .write_image_data(&vec![0u8; (w * h * 4) as usize])
+                .unwrap();
             out
         };
         let over = editor::composite_png(&png, Some(&clear)).unwrap();
         for (name, result) in [("no overlay", alone), ("transparent overlay", over)] {
             let r = decode_rgba(&result);
-            let diff = original.0.chunks(4).zip(r.0.chunks(4)).filter(|(a, b)| a[..3] != b[..3]).count();
+            let diff = original
+                .0
+                .chunks(4)
+                .zip(r.0.chunks(4))
+                .filter(|(a, b)| a[..3] != b[..3])
+                .count();
             println!(
                 "display {} ({}x{} px), {name}: {}",
                 f.display.id,
                 w,
                 h,
-                if diff == 0 { "EXACT".to_string() } else { format!("{diff} px differ") }
+                if diff == 0 {
+                    "EXACT".to_string()
+                } else {
+                    format!("{diff} px differ")
+                }
             );
         }
     }
@@ -42,7 +54,10 @@ fn decode_rgba(bytes: &[u8]) -> (Vec<u8>, u32, u32) {
     buf.truncate(info.buffer_size());
     let rgba = match info.color_type {
         png::ColorType::Rgba => buf,
-        png::ColorType::Rgb => buf.chunks(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        png::ColorType::Rgb => buf
+            .chunks(3)
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect(),
         _ => panic!("unexpected colour type"),
     };
     (rgba, info.width, info.height)

@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The capture window and the per-display overlays",
-  "windows": ["main", "overlay-*"],
-  "permissions": ["core:default"]
+  "description": "The capture window, the per-display overlays and editor windows",
+  "windows": [
+    "main",
+    "overlay-*",
+    "editor-*"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open"
+  ]
 }

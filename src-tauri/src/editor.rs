@@ -33,14 +33,22 @@ pub fn decode(bytes: &[u8]) -> Result<CFRetained<CGImage>, String> {
     // SAFETY: documented ImageIO calls; no options.
     unsafe {
         let source = CGImageSource::with_data(&data, None).ok_or("not an image")?;
-        source.image_at_index(0, None).ok_or_else(|| "couldn't read the image".to_string())
+        source
+            .image_at_index(0, None)
+            .ok_or_else(|| "couldn't read the image".to_string())
     }
 }
 
 /// The original with the overlay drawn over it, at the original's size and in its colour space. Where the overlay
 /// is transparent, the original's pixels are untouched.
-pub fn composite(original: &CGImage, overlay: Option<&CGImage>) -> Result<CFRetained<CGImage>, String> {
-    let (w, h) = (CGImage::width(Some(original)), CGImage::height(Some(original)));
+pub fn composite(
+    original: &CGImage,
+    overlay: Option<&CGImage>,
+) -> Result<CFRetained<CGImage>, String> {
+    let (w, h) = (
+        CGImage::width(Some(original)),
+        CGImage::height(Some(original)),
+    );
     let space = CGImage::color_space(Some(original)).ok_or("the image has no colour space")?;
     // SAFETY: a context we own (create rule), drawn into and read on this thread only.
     let ctx = unsafe {
@@ -75,7 +83,9 @@ pub fn composite(original: &CGImage, overlay: Option<&CGImage>) -> Result<CFReta
 fn as_srgb(image: CFRetained<CGImage>) -> CFRetained<CGImage> {
     use objc2_core_graphics::kCGColorSpaceSRGB;
     // SAFETY: a static CoreGraphics name constant.
-    let Some(srgb) = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB })) else { return image };
+    let Some(srgb) = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB })) else {
+        return image;
+    };
     CGImage::new_copy_with_color_space(Some(&image), Some(&srgb)).unwrap_or(image)
 }
 

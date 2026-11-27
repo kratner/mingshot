@@ -27,7 +27,7 @@ type Captured = {
   /** Where it went. */
   delivered: Delivered;
 };
-type Delivered = { copied: boolean; saved: string | null };
+type Delivered = { copied: boolean; saved: string | null; editing?: boolean };
 /** What MingShot recorded about a capture (metadata.rs); arrives just after the capture itself. */
 type Source = {
   app: string;
@@ -44,7 +44,7 @@ type Meta = {
   /** Every window visible in the capture, most coverage first. */
   windows: (Source & { coverage: number })[];
 };
-type After = 'copy' | 'save' | 'both';
+type After = 'copy' | 'save' | 'both' | 'edit';
 
 type Mode = 'region' | 'window' | 'display';
 
@@ -158,6 +158,21 @@ export default function CaptureWindow() {
     }
   }
 
+  async function onOpen() {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'MingShot captures', extensions: ['png', 'mingshot'] }],
+    });
+    if (typeof picked !== 'string') return;
+    try {
+      await invoke('open_document', { path: picked });
+    } catch (e) {
+      setStatus({ kind: 'error', message: String(e) });
+    }
+  }
+
   async function onRepeat() {
     try {
       await invoke('repeat_region');
@@ -187,6 +202,9 @@ export default function CaptureWindow() {
           }
         >
           ↻ Repeat
+        </button>
+        <button className="repeat" onClick={onOpen} title="Open a saved capture in the editor (annotations stay editable)">
+          Open…
         </button>
         <div className="group">
           <span className="group-label">Mode</span>
@@ -222,6 +240,7 @@ export default function CaptureWindow() {
               ['copy', 'Copy', 'Put it on the clipboard'],
               ['save', 'Save', 'Save a PNG in Pictures › MingShot'],
               ['both', 'Both', 'Copy and save'],
+              ['edit', 'Edit', 'Open in the editor to mark it up'],
             ]}
           />
         </div>
@@ -402,7 +421,7 @@ function StatusLine({
   onDelivered: (d: Delivered) => void;
   onError: (message: string) => void;
 }) {
-  const act = (action: 'copy' | 'save' | 'reveal' | 'open') =>
+  const act = (action: 'copy' | 'save' | 'reveal' | 'edit') =>
     invoke<Delivered>('last_capture', { action }).then(onDelivered, (e) => onError(String(e)));
   switch (status.kind) {
     case 'idle':
@@ -430,7 +449,9 @@ function StatusLine({
         <>
           <div className="status-main">
             <span className="tick">✓</span>{' '}
-            {d.copied && d.saved ? (
+            {d.editing ? (
+              <>Opened {size} px in the editor</>
+            ) : d.copied && d.saved ? (
               <>Copied and saved {size} px</>
             ) : d.saved ? (
               <>Saved {size} px to Pictures › MingShot</>
@@ -453,8 +474,8 @@ function StatusLine({
                   Show in Finder
                 </button>
               )}
-              <button className="link" onClick={() => act('open')} title="Open in your image app (saves it first)">
-                Open
+              <button className="link" onClick={() => act('edit')} title="Open in MingShot's editor to mark it up">
+                Edit
               </button>
             </span>
           </div>

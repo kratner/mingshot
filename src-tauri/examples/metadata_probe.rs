@@ -31,11 +31,25 @@ fn per_display() {
         let seen = metadata::visible_windows(&list, d.bounds);
         let t = std::time::Instant::now();
         let entries = metadata::sources(&seen, (d.bounds.x, d.bounds.y));
-        println!("\ndisplay {}: {} windows visible (details looked up in {} ms)", d.id, entries.len(), t.elapsed().as_millis());
+        println!(
+            "\ndisplay {}: {} windows visible (details looked up in {} ms)",
+            d.id,
+            entries.len(),
+            t.elapsed().as_millis()
+        );
         for e in entries.iter().take(6) {
             let title: String = e.source.window_title.chars().take(36).collect();
-            println!("  {:>5.1}%  {:<16} {:<38} {}", e.coverage * 100.0, e.source.app, format!("{title:?}"),
-                e.source.url.clone().or(e.source.file_path.clone()).unwrap_or_default());
+            println!(
+                "  {:>5.1}%  {:<16} {:<38} {}",
+                e.coverage * 100.0,
+                e.source.app,
+                format!("{title:?}"),
+                e.source
+                    .url
+                    .clone()
+                    .or(e.source.file_path.clone())
+                    .unwrap_or_default()
+            );
         }
     }
 }

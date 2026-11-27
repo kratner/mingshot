@@ -10,6 +10,8 @@ pub enum After {
     Copy,
     Save,
     Both,
+    /// Open the editor (M2); copy or save from there.
+    Edit,
 }
 
 impl After {
@@ -120,5 +122,6 @@ mod tests {
         assert!(After::Copy.copies() && !After::Copy.saves());
         assert!(!After::Save.copies() && After::Save.saves());
         assert!(After::Both.copies() && After::Both.saves());
+        assert!(!After::Edit.copies() && !After::Edit.saves());
     }
 }

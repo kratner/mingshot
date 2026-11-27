@@ -375,33 +375,82 @@ fn ax_frame(el: &objc2_application_services::AXUIElement) -> Option<Rect> {
 
 // ---- Sidecar ---------------------------------------------------------------------------------------------------
 
-/// The `.mingshot` file beside a saved PNG (PLAN.md §2 "Library"): the image's name, its metadata, and (from M2) the
-/// editable annotations.
-#[derive(serde::Serialize)]
-struct Sidecar<'a> {
-    format: &'static str,
-    version: u32,
-    image: String,
-    metadata: &'a Meta,
-    annotations: [u8; 0],
+/// The `.mingshot` file beside a saved PNG (PLAN.md §2 "Library"): the image's name, its metadata, the editable
+/// annotations (M2), and, once there are annotations, the untouched original (base64 PNG), so the PNG beside it can
+/// show the markup in any app while MingShot can always reopen the capture clean underneath.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Document {
+    pub format: String,
+    pub version: u32,
+    pub image: String,
+    pub metadata: Option<Meta>,
+    #[serde(default)]
+    pub annotations: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_png: Option<String>,
 }
 
 /// Writes `<name>.mingshot` beside `png_path`; returns its path.
-pub fn write_sidecar(png_path: &Path, meta: &Meta) -> Result<std::path::PathBuf, String> {
+pub fn write_sidecar(
+    png_path: &Path,
+    meta: Option<&Meta>,
+    annotations: &serde_json::Value,
+    original: Option<&[u8]>,
+) -> Result<std::path::PathBuf, String> {
+    use base64::Engine;
     let path = png_path.with_extension("mingshot");
-    let doc = Sidecar {
-        format: "mingshot",
+    let doc = Document {
+        format: "mingshot".into(),
         version: 1,
         image: png_path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default(),
-        metadata: meta,
-        annotations: [],
+        metadata: meta.cloned(),
+        annotations: if annotations.is_null() {
+            serde_json::json!([])
+        } else {
+            annotations.clone()
+        },
+        original_png: original.map(|b| base64::engine::general_purpose::STANDARD.encode(b)),
     };
     let json = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
     Ok(path)
+}
+
+/// A saved capture to edit again: the clean original (from the sidecar if it has one, else the PNG beside it),
+/// the annotations and the metadata. `path` may be the `.mingshot` or its `.png`.
+pub struct Opened {
+    pub png_path: std::path::PathBuf,
+    pub original: Vec<u8>,
+    pub annotations: serde_json::Value,
+    pub meta: Option<Meta>,
+}
+
+pub fn read_document(path: &Path) -> Result<Opened, String> {
+    use base64::Engine;
+    let sidecar = path.with_extension("mingshot");
+    let png_path = path.with_extension("png");
+    let doc: Option<Document> = std::fs::read_to_string(&sidecar)
+        .ok()
+        .and_then(|j| serde_json::from_str(&j).ok());
+    let original = match doc.as_ref().and_then(|d| d.original_png.as_ref()) {
+        Some(b64) => base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| e.to_string())?,
+        None => std::fs::read(&png_path)
+            .map_err(|e| format!("couldn't read {}: {e}", png_path.display()))?,
+    };
+    Ok(Opened {
+        png_path,
+        original,
+        annotations: doc
+            .as_ref()
+            .map(|d| d.annotations.clone())
+            .unwrap_or_else(|| serde_json::json!([])),
+        meta: doc.and_then(|d| d.metadata),
+    })
 }
 
 #[cfg(test)]
@@ -506,7 +555,9 @@ mod tests {
         assert_eq!(classify("about:blank"), (None, None));
         // An Electron app's own page is not a document.
         assert_eq!(
-            classify("file:///Applications/Claude.app/Contents/Resources/app.asar/.vite/renderer/main_window/index.html"),
+            classify(
+                "file:///Applications/Claude.app/Contents/Resources/app.asar/.vite/renderer/main_window/index.html"
+            ),
             (None, None)
         );
     }
@@ -553,7 +604,7 @@ mod tests {
             windows: Vec::new(),
             app_version: "0.0.1".into(),
         };
-        let path = write_sidecar(&png, &meta).unwrap();
+        let path = write_sidecar(&png, Some(&meta), &serde_json::json!([]), None).unwrap();
         assert_eq!(
             path.file_name().unwrap(),
             "MingShot 2026-11-26 at 21.11.43.mingshot"
@@ -564,6 +615,15 @@ mod tests {
         assert_eq!(v["image"], "MingShot 2026-11-26 at 21.11.43.png");
         assert_eq!(v["metadata"]["kind"], "region");
         assert_eq!(v["metadata"]["display"]["scale"], 2.0);
+        assert!(v.get("original_png").is_none());
+        // With annotations and the original kept: reading it back gives the clean original and the shapes.
+        std::fs::write(&png, b"flattened").unwrap();
+        let shapes = serde_json::json!([{"id": "s1", "kind": "arrow"}]);
+        write_sidecar(&png, Some(&meta), &shapes, Some(b"original")).unwrap();
+        let back = read_document(&png).unwrap();
+        assert_eq!(back.original, b"original");
+        assert_eq!(back.annotations, shapes);
+        assert_eq!(back.meta.unwrap().kind, "region");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

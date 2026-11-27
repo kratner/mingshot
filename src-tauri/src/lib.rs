@@ -6,9 +6,9 @@
 pub mod capture;
 #[cfg(target_os = "macos")]
 pub mod compat;
-pub mod log;
 #[cfg(target_os = "macos")]
 pub mod editor;
+pub mod log;
 #[cfg(target_os = "macos")]
 pub mod metadata;
 #[cfg(target_os = "macos")]
@@ -185,13 +185,227 @@ mod app {
         copied: bool,
         /// The saved file's full path, if it's been saved.
         saved: Option<String>,
+        /// Opened in the editor (After capture → Edit, or Open).
+        editing: bool,
     }
 
     fn delivered(l: &Last) -> Delivered {
         Delivered {
             copied: l.copied,
             saved: l.saved.as_ref().map(|p| p.display().to_string()),
+            editing: false,
         }
+    }
+
+    // ---- The editor (M2) --------------------------------------------------------------------------------------
+
+    /// A capture open in an editor window: the clean original, the annotations so far, and where it's saved.
+    struct EditDoc {
+        original: Vec<u8>,
+        width: usize,
+        height: usize,
+        /// Pixels per point of the capture (stroke widths are chosen in points).
+        scale: f64,
+        meta: Option<crate::metadata::Meta>,
+        saved: Option<std::path::PathBuf>,
+        annotations: serde_json::Value,
+        title: String,
+        /// The capture it came from, so its metadata can arrive after the window opens.
+        seq: Option<u64>,
+    }
+
+    static EDITS: std::sync::LazyLock<Mutex<std::collections::HashMap<u64, EditDoc>>> =
+        std::sync::LazyLock::new(Default::default);
+    static NEXT_EDIT: AtomicU64 = AtomicU64::new(1);
+
+    /// Opens an editor window on a capture; returns its id.
+    fn open_editor(app: &AppHandle, doc: EditDoc) -> Result<u64, String> {
+        let id = NEXT_EDIT.fetch_add(1, Ordering::SeqCst);
+        // The image at its size in points, plus the toolbar and status bar, within reason.
+        let (pw, ph) = (doc.width as f64 / doc.scale, doc.height as f64 / doc.scale);
+        let w = (pw + 40.0).clamp(640.0, 1280.0);
+        let h = (ph + 40.0 + 56.0 + 30.0).clamp(420.0, 880.0);
+        let title = doc.title.clone();
+        EDITS.lock().unwrap().insert(id, doc);
+        let label = format!("editor-{id}");
+        let window = WebviewWindowBuilder::new(
+            app,
+            &label,
+            WebviewUrl::App(format!("index.html?editor={id}").into()),
+        )
+        .title(title)
+        .inner_size(w, h)
+        .min_inner_size(560.0, 360.0)
+        .center()
+        .build()
+        .map_err(|e| {
+            EDITS.lock().unwrap().remove(&id);
+            e.to_string()
+        })?;
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                EDITS.lock().unwrap().remove(&id);
+            }
+        });
+        let _ = window.set_focus();
+        log::event(&format!("editor {id} opened"));
+        Ok(id)
+    }
+
+    fn edit_doc_for(
+        png: Vec<u8>,
+        meta: Option<crate::metadata::Meta>,
+        saved: Option<std::path::PathBuf>,
+        annotations: serde_json::Value,
+        seq: Option<u64>,
+    ) -> Result<EditDoc, String> {
+        let image = crate::editor::decode(&png)?;
+        let (width, height) = (
+            objc2_core_graphics::CGImage::width(Some(&image)),
+            objc2_core_graphics::CGImage::height(Some(&image)),
+        );
+        let scale = meta.as_ref().map_or(2.0, |m| m.display.scale).max(1.0);
+        let title = match &saved {
+            Some(p) => p
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            None => format!("MingShot · {width} × {height}"),
+        };
+        Ok(EditDoc {
+            original: png,
+            width,
+            height,
+            scale,
+            meta,
+            saved,
+            annotations,
+            title,
+            seq,
+        })
+    }
+
+    #[derive(Serialize)]
+    struct EditorInfo {
+        width: usize,
+        height: usize,
+        scale: f64,
+        title: String,
+        annotations: serde_json::Value,
+        saved: Option<String>,
+    }
+
+    #[tauri::command]
+    fn editor_doc(id: u64) -> Result<EditorInfo, String> {
+        let edits = EDITS.lock().unwrap();
+        let d = edits.get(&id).ok_or("that editor has closed")?;
+        Ok(EditorInfo {
+            width: d.width,
+            height: d.height,
+            scale: d.scale,
+            title: d.title.clone(),
+            annotations: d.annotations.clone(),
+            saved: d.saved.as_ref().map(|p| p.display().to_string()),
+        })
+    }
+
+    /// The editor's background: the original capture, as PNG bytes.
+    #[tauri::command]
+    fn editor_image(id: u64) -> tauri::ipc::Response {
+        let png = EDITS
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|d| d.original.clone())
+            .unwrap_or_default();
+        tauri::ipc::Response::new(png)
+    }
+
+    /// Copy and/or save the edited capture: the editor's overlay (a transparent PNG at full size, base64) composited
+    /// over the original (editor.rs), annotations kept in the sidecar with the clean original.
+    #[tauri::command]
+    async fn editor_export(
+        app: AppHandle,
+        id: u64,
+        overlay: Option<String>,
+        annotations: serde_json::Value,
+        action: String,
+    ) -> Result<Delivered, String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            use base64::Engine;
+            let overlay = overlay
+                .map(|b| {
+                    base64::engine::general_purpose::STANDARD
+                        .decode(b.trim_start_matches("data:image/png;base64,"))
+                })
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            let (original, meta, saved) = {
+                let edits = EDITS.lock().unwrap();
+                let d = edits.get(&id).ok_or("that editor has closed")?;
+                (d.original.clone(), d.meta.clone(), d.saved.clone())
+            };
+            let png = crate::editor::composite_png(&original, overlay.as_deref())?;
+            let (copy, save) = (
+                action == "copy" || action == "both",
+                action == "save" || action == "both",
+            );
+            if copy {
+                let p = png.clone();
+                on_main(&app, move |_| capture::copy_png(&p))?;
+            }
+            let mut path = saved;
+            if save {
+                let target = match &path {
+                    Some(p) => {
+                        std::fs::write(p, &png)
+                            .map_err(|e| format!("couldn't save {}: {e}", p.display()))?;
+                        p.clone()
+                    }
+                    None => crate::output::save(&png)?,
+                };
+                let has_shapes = annotations.as_array().is_some_and(|a| !a.is_empty());
+                crate::metadata::write_sidecar(
+                    &target,
+                    meta.as_ref(),
+                    &annotations,
+                    has_shapes.then_some(original.as_slice()),
+                )?;
+                path = Some(target);
+            }
+            if let Some(d) = EDITS.lock().unwrap().get_mut(&id) {
+                d.annotations = annotations;
+                if save {
+                    d.saved = path.clone();
+                }
+            }
+            log::event(&format!("editor {id}: {action}"));
+            Ok(Delivered {
+                copied: copy,
+                saved: path.map(|p| p.display().to_string()),
+                editing: true,
+            })
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    /// Reopens a saved capture (its .png or .mingshot) in the editor, annotations editable.
+    #[tauri::command]
+    async fn open_document(app: AppHandle, path: String) -> Result<u64, String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            let opened = crate::metadata::read_document(std::path::Path::new(&path))?;
+            let doc = edit_doc_for(
+                opened.original,
+                opened.meta,
+                Some(opened.png_path),
+                opened.annotations,
+                None,
+            )?;
+            open_editor(&app, doc)
+        })
+        .await
+        .map_err(|e| e.to_string())?
     }
 
     /// A window the overlay can highlight, in points relative to the overlay's display.
@@ -670,6 +884,11 @@ mod app {
         }
         let seq = CAPTURE_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
         let saved_path = saved.clone();
+        let editing = after == crate::output::After::Edit;
+        if editing {
+            let doc = edit_doc_for(png.clone(), None, None, serde_json::json!([]), Some(seq))?;
+            open_editor(app, doc)?;
+        }
         let last = Last {
             seq,
             png,
@@ -685,7 +904,10 @@ mod app {
             timings,
             region,
             repeated,
-            delivered: delivered(&last),
+            delivered: Delivered {
+                editing,
+                ..delivered(&last)
+            },
         };
         *LAST.lock().unwrap() = Some(last);
         if let Some(r) = region {
@@ -704,12 +926,21 @@ mod app {
         std::thread::spawn(move || {
             let meta = ctx.finish();
             if let Some(path) = &saved_path
-                && let Err(e) = crate::metadata::write_sidecar(path, &meta)
+                && let Err(e) =
+                    crate::metadata::write_sidecar(path, Some(&meta), &serde_json::json!([]), None)
             {
                 log::event(&format!("sidecar: {e}"));
             }
             if let Some(l) = LAST.lock().unwrap().as_mut().filter(|l| l.seq == seq) {
                 l.meta = Some(meta.clone());
+            }
+            for d in EDITS
+                .lock()
+                .unwrap()
+                .values_mut()
+                .filter(|d| d.seq == Some(seq))
+            {
+                d.meta = Some(meta.clone());
             }
             let _ = app.emit_to("main", "metadata", meta);
         });
@@ -979,11 +1210,26 @@ mod app {
                     on_main(&app, move |_| capture::copy_png(&png))?;
                     last.copied = true;
                 }
+                "edit" => {
+                    let doc = edit_doc_for(
+                        last.png.clone(),
+                        last.meta.clone(),
+                        last.saved.clone(),
+                        serde_json::json!([]),
+                        Some(last.seq),
+                    )?;
+                    open_editor(&app, doc)?;
+                }
                 "save" | "open" | "reveal" => {
                     if last.saved.is_none() {
                         let path = crate::output::save(&last.png)?;
                         if let Some(meta) = &last.meta
-                            && let Err(e) = crate::metadata::write_sidecar(&path, meta)
+                            && let Err(e) = crate::metadata::write_sidecar(
+                                &path,
+                                Some(meta),
+                                &serde_json::json!([]),
+                                None,
+                            )
                         {
                             log::event(&format!("sidecar: {e}"));
                         }
@@ -1199,6 +1445,7 @@ mod app {
         let repeat_key = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Digit3);
 
         tauri::Builder::default()
+            .plugin(tauri_plugin_dialog::init())
             .plugin(
                 tauri_plugin_global_shortcut::Builder::new()
                     .with_handler(move |app, shortcut, event| {
@@ -1239,6 +1486,10 @@ mod app {
                 set_mode,
                 repeat_region,
                 last_capture,
+                editor_doc,
+                editor_image,
+                editor_export,
+                open_document,
                 accessibility,
                 set_last_region,
                 loupe,
