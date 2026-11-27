@@ -69,8 +69,11 @@ export default function Editor({ id }: { id: number }) {
       setHistory(start(Array.isArray(d.annotations) ? d.annotations : []));
       document.title = d.title;
     });
-    invoke<ArrayBuffer>('editor_image', { id }).then((buf) => {
-      setImageUrl(URL.createObjectURL(new Blob([buf], { type: 'image/png' })));
+    invoke<ArrayBuffer | number[]>('editor_image', { id }).then((buf) => {
+      // Binary replies arrive as an ArrayBuffer, but as a plain array of numbers through the IPC fallback older
+      // WebKits use (Mojave's showed a broken image: Keith, 2026-11-26).
+      const bytes = buf instanceof ArrayBuffer ? new Uint8Array(buf) : Uint8Array.from(buf);
+      setImageUrl(URL.createObjectURL(new Blob([bytes], { type: 'image/png' })));
     });
   }, [id]);
 

@@ -885,10 +885,12 @@ mod app {
         let seq = CAPTURE_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
         let saved_path = saved.clone();
         let editing = after == crate::output::After::Edit;
-        if editing {
+        let editor = if editing {
             let doc = edit_doc_for(png.clone(), None, None, serde_json::json!([]), Some(seq))?;
-            open_editor(app, doc)?;
-        }
+            Some(open_editor(app, doc)?)
+        } else {
+            None
+        };
         let last = Last {
             seq,
             png,
@@ -920,6 +922,14 @@ mod app {
             captured.delivered.saved.is_some()
         ));
         show_main(app);
+        // The editor comes last, so it's in front of the capture window (on Mojave it opened behind it: Keith,
+        // 2026-11-26).
+        if let Some(id) = editor
+            && let Some(w) = app.get_webview_window(&format!("editor-{id}"))
+        {
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
         let _ = app.emit_to("main", "captured", captured.clone());
         // The source window's details can take a moment (Accessibility), so they follow the picture.
         let app = app.clone();

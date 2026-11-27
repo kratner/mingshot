@@ -120,6 +120,19 @@ await check('Copy sends the annotation layer at full size, shapes in place', asy
   assert.equal(result.empty, 0, 'untouched areas are transparent');
 });
 
+await check('the capture shows when binary replies come as arrays (Mojave)', async () => {
+  const p2 = await browser.newPage({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 });
+  await p2.goto(`http://localhost:${port}/?editor=1&mock=array`);
+  await p2.waitForSelector('.editor-canvas img');
+  const size = await p2.evaluate(async () => {
+    const img = document.querySelector('.editor-canvas img');
+    await img.decode();
+    return [img.naturalWidth, img.naturalHeight];
+  });
+  assert.deepEqual(size, [800, 500]);
+  await p2.close();
+});
+
 await check('no script errors', async () => {
   assert.deepEqual(errors, []);
 });

@@ -22,8 +22,10 @@ async function testImage(): Promise<ArrayBuffer> {
   return blob.arrayBuffer();
 }
 
-export async function installMock() {
-  const image = await testImage();
+/** `array`: binary replies come back as plain arrays of numbers, as through older WebKits' IPC fallback (Mojave). */
+export async function installMock(mode: string) {
+  const png = await testImage();
+  const image = mode === 'array' ? Array.from(new Uint8Array(png)) : png;
   const exports: unknown[] = [];
   (window as unknown as { __exports: unknown[] }).__exports = exports;
   mockIPC((cmd, args) => {

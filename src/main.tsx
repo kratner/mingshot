@@ -15,7 +15,7 @@ const editor = params.get('editor');
 if (overlay) document.documentElement.classList.add('is-overlay');
 
 // Browser test of the editor (scripts/editor-ui-test.mjs): a mock of the Rust side, only outside Tauri.
-const mock = params.get('mock') && !('__TAURI_INTERNALS__' in window) ? import('./mock').then((m) => m.installMock()) : Promise.resolve();
+const mock = params.get('mock') && !('__TAURI_INTERNALS__' in window) ? import('./mock').then((m) => m.installMock(params.get('mock') ?? '')) : Promise.resolve();
 
 mock.then(() => ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

@@ -87,9 +87,10 @@ function Loupe({ display, at, size }: { display: number; at: Pt; size: string | 
       if (inFlight.current) return;
       inFlight.current = true;
       const p = wanted.current;
-      invoke<ArrayBuffer>('loupe', { display, x: p.x, y: p.y })
+      invoke<ArrayBuffer | number[]>('loupe', { display, x: p.x, y: p.y })
         .then((buf) => {
-          const bytes = new Uint8ClampedArray(buf);
+          // An ArrayBuffer, or a plain array through older WebKits' IPC fallback: both work here.
+          const bytes = new Uint8ClampedArray(buf as ArrayBuffer);
           const c = canvas.current;
           if (!c || bytes.length !== LOUPE * LOUPE * 4) return;
           const small = document.createElement('canvas');
