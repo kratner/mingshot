@@ -62,6 +62,11 @@ await check('arrow, box and text are drawn', async () => {
   assert.match(await status(), /3 annotations/);
 });
 
+await check('drawings reach the app as they change (nothing lost on close)', async () => {
+  const last = await page.evaluate(() => window.__syncs[window.__syncs.length - 1]);
+  assert.equal(last.annotations.length, 3);
+});
+
 await check('undo and redo', async () => {
   await page.keyboard.press('Meta+z');
   assert.match(await status(), /2 annotations/);
@@ -131,6 +136,17 @@ await check('the capture shows when binary replies come as arrays (Mojave)', asy
   });
   assert.deepEqual(size, [800, 500]);
   await p2.close();
+});
+
+await check('Copy and Save stay on screen in a narrow editor', async () => {
+  const p3 = await browser.newPage({ viewport: { width: 700, height: 500 }, deviceScaleFactor: 1 });
+  await p3.goto(`http://localhost:${port}/?editor=1&mock=1`);
+  await p3.waitForSelector('.editor-canvas canvas');
+  for (const name of ['Copy', 'Save']) {
+    const b = await p3.getByRole('button', { name, exact: true }).boundingBox();
+    assert.ok(b && b.x >= 0 && b.x + b.width <= 700 && b.y + b.height <= 500, `${name} at ${JSON.stringify(b)}`);
+  }
+  await p3.close();
 });
 
 await check('no script errors', async () => {

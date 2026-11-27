@@ -103,6 +103,17 @@ export default function Editor({ id }: { id: number }) {
 
   const change = useCallback((next: Scene) => setHistory((h) => commit(h, next)), []);
 
+  // Every change goes to the app as it happens, so closing the window loses nothing: Edit reopens it as it was.
+  const loaded = useRef(false);
+  useEffect(() => {
+    if (!info) return;
+    if (!loaded.current) {
+      loaded.current = true;
+      return;
+    }
+    invoke('editor_sync', { id, annotations: scene }).catch(() => {});
+  }, [scene, info, id]);
+
   // ---- Export ------------------------------------------------------------------------------------------------
 
   /** The annotations alone, rendered at the capture's full pixel size, as a PNG data URL (null when there are none). */
@@ -122,7 +133,7 @@ export default function Editor({ id }: { id: number }) {
     try {
       const d = await invoke<Delivered>('editor_export', { id, overlay: overlay(), annotations: scene, action });
       if (d.saved) setSaved(d.saved);
-      setMessage(action === 'copy' ? 'Copied to the clipboard' : `Saved ${fileName(d.saved ?? '')}`);
+      setMessage(action === 'copy' ? 'Copied to the clipboard' : 'Saved');
     } catch (e) {
       setMessage(String(e));
     }
@@ -380,7 +391,17 @@ export default function Editor({ id }: { id: number }) {
       <div className="editor-status">
         <span>
           {info.width} × {info.height} px · {scene.length} annotation{scene.length === 1 ? '' : 's'}
-          {saved ? ` · ${fileName(saved)}` : ''}
+          {saved ? (
+            <>
+              {' '}
+              · Saved in Pictures › MingShot as {fileName(saved)}{' '}
+              <button className="link" onClick={() => invoke('reveal_file', { path: saved })}>
+                Show in Finder
+              </button>
+            </>
+          ) : (
+            ' · Not saved yet (⌘S saves to Pictures › MingShot)'
+          )}
         </span>
         {message && <span className="editor-message">{message}</span>}
       </div>

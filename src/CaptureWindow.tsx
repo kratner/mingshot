@@ -160,7 +160,9 @@ export default function CaptureWindow() {
 
   async function onOpen() {
     const { open } = await import('@tauri-apps/plugin-dialog');
+    const folder = await invoke<string>('captures_folder').catch(() => undefined);
     const picked = await open({
+      defaultPath: folder,
       multiple: false,
       directory: false,
       filters: [{ name: 'MingShot captures', extensions: ['png', 'mingshot'] }],

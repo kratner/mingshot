@@ -413,10 +413,14 @@ html.is-overlay body {
 }
 .editor-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  padding: 10px 14px;
+  padding: 4px 14px 10px;
   border-bottom: 1px solid var(--fo-line);
   background: var(--fo-surface);
+}
+.editor-toolbar > * {
+  margin-top: 6px;
 }
 .editor-toolbar > * + * {
   margin-left: 12px;
@@ -484,6 +488,9 @@ button.new.editor-save {
   min-width: 120px;
   overflow: hidden;
   white-space: pre;
+}
+.editor-status .link {
+  font-size: 12px;
 }
 .editor-status {
   display: flex;

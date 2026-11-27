@@ -27,13 +27,18 @@ export async function installMock(mode: string) {
   const png = await testImage();
   const image = mode === 'array' ? Array.from(new Uint8Array(png)) : png;
   const exports: unknown[] = [];
+  const syncs: unknown[] = [];
   (window as unknown as { __exports: unknown[] }).__exports = exports;
+  (window as unknown as { __syncs: unknown[] }).__syncs = syncs;
   mockIPC((cmd, args) => {
     switch (cmd) {
       case 'editor_doc':
         return { width: MOCK_W, height: MOCK_H, scale: 2, title: 'Mock capture', annotations: [], saved: null };
       case 'editor_image':
         return image;
+      case 'editor_sync':
+        syncs.push(args);
+        return null;
       case 'editor_export':
         exports.push(args);
         return { copied: true, saved: null, editing: true };

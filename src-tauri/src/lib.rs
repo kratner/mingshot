@@ -175,6 +175,8 @@ mod app {
         copied: bool,
         saved: Option<std::path::PathBuf>,
         meta: Option<crate::metadata::Meta>,
+        /// Drawings made on it in the editor, kept when the editor closes so Edit brings them back.
+        annotations: serde_json::Value,
     }
 
     static LAST: Mutex<Option<Last>> = Mutex::new(None);
@@ -223,7 +225,7 @@ mod app {
         let id = NEXT_EDIT.fetch_add(1, Ordering::SeqCst);
         // The image at its size in points, plus the toolbar and status bar, within reason.
         let (pw, ph) = (doc.width as f64 / doc.scale, doc.height as f64 / doc.scale);
-        let w = (pw + 40.0).clamp(640.0, 1280.0);
+        let w = (pw + 40.0).clamp(820.0, 1280.0);
         let h = (ph + 40.0 + 56.0 + 30.0).clamp(420.0, 880.0);
         let title = doc.title.clone();
         EDITS.lock().unwrap().insert(id, doc);
@@ -235,7 +237,7 @@ mod app {
         )
         .title(title)
         .inner_size(w, h)
-        .min_inner_size(560.0, 360.0)
+        .min_inner_size(700.0, 400.0)
         .center()
         .build()
         .map_err(|e| {
@@ -244,7 +246,19 @@ mod app {
         })?;
         window.on_window_event(move |event| {
             if let tauri::WindowEvent::Destroyed = event {
-                EDITS.lock().unwrap().remove(&id);
+                // The editor's drawings (synced as they change) and save location go back to the capture they came
+                // from, so Edit reopens them (Keith, 2026-11-27: closing lost them). EDITS is released before LAST
+                // is taken: the Edit action takes them the other way round.
+                let doc = EDITS.lock().unwrap().remove(&id);
+                if let Some(doc) = doc
+                    && let Some(seq) = doc.seq
+                    && let Some(last) = LAST.lock().unwrap().as_mut().filter(|l| l.seq == seq)
+                {
+                    last.annotations = doc.annotations;
+                    if doc.saved.is_some() {
+                        last.saved = doc.saved;
+                    }
+                }
             }
         });
         let _ = window.set_focus();
@@ -388,6 +402,26 @@ mod app {
         })
         .await
         .map_err(|e| e.to_string())?
+    }
+
+    /// The editor's drawings as they change, so nothing is lost when the window closes.
+    #[tauri::command]
+    fn editor_sync(id: u64, annotations: serde_json::Value) {
+        if let Some(d) = EDITS.lock().unwrap().get_mut(&id) {
+            d.annotations = annotations;
+        }
+    }
+
+    /// Where captures are saved (~/Pictures/MingShot): where Open… starts.
+    #[tauri::command]
+    fn captures_folder() -> Result<String, String> {
+        crate::output::folder().map(|p| p.display().to_string())
+    }
+
+    /// Shows a saved capture in Finder (from the editor's status line).
+    #[tauri::command]
+    fn reveal_file(path: String) -> Result<(), String> {
+        crate::output::reveal(std::path::Path::new(&path))
     }
 
     /// Reopens a saved capture (its .png or .mingshot) in the editor, annotations editable.
@@ -897,6 +931,7 @@ mod app {
             copied: after.copies(),
             saved,
             meta: None,
+            annotations: serde_json::json!([]),
         };
         let captured = Captured {
             width,
@@ -1225,7 +1260,7 @@ mod app {
                         last.png.clone(),
                         last.meta.clone(),
                         last.saved.clone(),
-                        serde_json::json!([]),
+                        last.annotations.clone(),
                         Some(last.seq),
                     )?;
                     open_editor(&app, doc)?;
@@ -1499,6 +1534,9 @@ mod app {
                 editor_doc,
                 editor_image,
                 editor_export,
+                editor_sync,
+                captures_folder,
+                reveal_file,
                 open_document,
                 accessibility,
                 set_last_region,
