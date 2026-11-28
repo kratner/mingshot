@@ -220,6 +220,21 @@ mod app {
         std::sync::LazyLock::new(Default::default);
     static NEXT_EDIT: AtomicU64 = AtomicU64::new(1);
 
+    /// Whether the capture window has been shown for the first time (by main_ready or the fallback).
+    static MAIN_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// The capture window's page has drawn: show it the first time.
+    #[tauri::command]
+    fn main_ready(app: AppHandle) {
+        if !MAIN_SHOWN.swap(true, Ordering::SeqCst)
+            && let Some(main) = app.get_webview_window("main")
+        {
+            log::event("capture window shown (page drawn)");
+            let _ = main.show();
+            let _ = main.set_focus();
+        }
+    }
+
     /// Opens an editor window on a capture; returns its id.
     fn open_editor(app: &AppHandle, doc: EditDoc) -> Result<u64, String> {
         // One editor per capture: Edit while it's open brings that window forward instead of opening another
@@ -1552,6 +1567,7 @@ mod app {
                     .build(),
             )
             .invoke_handler(tauri::generate_handler![
+                main_ready,
                 start_capture,
                 finish_capture,
                 finish_window_capture,
@@ -1591,9 +1607,19 @@ mod app {
                 }
                 ensure_overlays(app.handle());
                 hide_overlays(app.handle()); // prepares them for the first New
-                if let Some(main) = app.get_webview_window("main") {
-                    let _ = main.show();
-                }
+                // The capture window shows once its page has drawn (main_ready), so the first launch doesn't flash a
+                // blank white window while WebKit warms up (Keith, 2026-11-28, Mojave). If the page never says so (a
+                // script failure), it shows after 3 s anyway.
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    if !MAIN_SHOWN.swap(true, Ordering::SeqCst) {
+                        log::event("capture window shown by the 3 s fallback");
+                        if let Some(main) = handle.get_webview_window("main") {
+                            let _ = main.show();
+                        }
+                    }
+                });
                 Ok(())
             })
             .run(tauri::generate_context!())

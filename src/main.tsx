@@ -21,4 +21,9 @@ mock.then(() => ReactDOM.createRoot(document.getElementById('root') as HTMLEleme
   <React.StrictMode>
     {overlay ? <Overlay display={Number(overlay)} /> : editor ? <Editor id={Number(editor)} /> : <CaptureWindow />}
   </React.StrictMode>,
-));
+)).then(() => {
+  // The capture window starts hidden; show it once this page has drawn, so the first launch has no white flash.
+  if (!overlay && !editor && '__TAURI_INTERNALS__' in window)
+    // (A timer, not requestAnimationFrame: a hidden window gets no animation frames.)
+    setTimeout(() => import('@tauri-apps/api/core').then(({ invoke }) => invoke('main_ready')), 30);
+});
