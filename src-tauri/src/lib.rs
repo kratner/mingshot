@@ -222,6 +222,21 @@ mod app {
 
     /// Opens an editor window on a capture; returns its id.
     fn open_editor(app: &AppHandle, doc: EditDoc) -> Result<u64, String> {
+        // One editor per capture: Edit while it's open brings that window forward instead of opening another
+        // (Keith, 2026-11-28: each Edit opened a new window).
+        let open = EDITS.lock().unwrap().iter().find_map(|(id, d)| {
+            let same = (doc.seq.is_some() && d.seq == doc.seq) || (doc.saved.is_some() && d.saved == doc.saved);
+            same.then_some(*id)
+        });
+        if let Some(id) = open
+            && let Some(w) = app.get_webview_window(&format!("editor-{id}"))
+        {
+            let _ = w.unminimize();
+            let _ = w.show();
+            let _ = w.set_focus();
+            log::event(&format!("editor {id} already open: focused"));
+            return Ok(id);
+        }
         let id = NEXT_EDIT.fetch_add(1, Ordering::SeqCst);
         // The image at its size in points, plus the toolbar and status bar, within reason.
         let (pw, ph) = (doc.width as f64 / doc.scale, doc.height as f64 / doc.scale);

@@ -10,6 +10,7 @@ import { Arrow as KArrow, Circle, Layer, Rect as KRect, Stage, Text as KText, Tr
 import {
   COLOURS,
   WIDTHS,
+  TEXT_SIZES,
   add,
   commit,
   move,
@@ -37,7 +38,6 @@ const TOOLS: [Tool, string, string][] = [
   ['rect', 'Box', 'R'],
   ['text', 'Text', 'T'],
 ];
-const TEXT_SIZE_PT = 18;
 const FONT = '-apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif';
 
 export default function Editor({ id }: { id: number }) {
@@ -231,7 +231,7 @@ export default function Editor({ id }: { id: number }) {
     const text = typing.value.replace(/\s+$/, '');
     if (keep && text) {
       if (typing.id) change(update<Label>(scene, typing.id, { text }));
-      else change(add(scene, { id: newId(scene), kind: 'text', x: typing.x, y: typing.y, text, style: { color: colour, width: TEXT_SIZE_PT * scale } }));
+      else change(add(scene, { id: newId(scene), kind: 'text', x: typing.x, y: typing.y, text, style: { color: colour, width: TEXT_SIZES[weight] * scale } }));
     } else if (keep && typing.id) {
       change(remove(scene, typing.id));
     }
@@ -353,7 +353,24 @@ export default function Editor({ id }: { id: number }) {
         </div>
         <div className="segmented" role="group" aria-label="Line width">
           {(Object.keys(WIDTHS) as (keyof typeof WIDTHS)[]).map((k) => (
-            <button key={k} className={k === weight ? 'seg on' : 'seg'} aria-pressed={k === weight} title={`${WIDTHS[k]} pt lines`} onClick={() => setWeight(k)}>
+            <button
+              key={k}
+              className={k === weight ? 'seg on' : 'seg'}
+              aria-pressed={k === weight}
+              title={`${WIDTHS[k]} pt lines, ${TEXT_SIZES[k]} pt text`}
+              onClick={() => {
+                setWeight(k);
+                // The selected shape takes the new size too, as it does a new colour (Keith, 2026-11-28).
+                if (selected)
+                  change(
+                    scene.map((s) =>
+                      s.id === selected
+                        ? { ...s, style: { ...s.style, width: (s.kind === 'text' ? TEXT_SIZES[k] : WIDTHS[k]) * scale } }
+                        : s,
+                    ),
+                  );
+              }}
+            >
               {k}
             </button>
           ))}
@@ -448,7 +465,7 @@ export default function Editor({ id }: { id: number }) {
               style={{
                 left: typing.x * fit,
                 top: typing.y * fit,
-                fontSize: TEXT_SIZE_PT * scale * fit,
+                fontSize: (scene.find((x) => x.id === typing.id)?.style.width ?? TEXT_SIZES[weight] * scale) * fit,
                 color: colour,
                 fontFamily: FONT,
               }}

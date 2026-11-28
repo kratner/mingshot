@@ -158,6 +158,23 @@ await check('Save turns off once saved and back on after a change', async () => 
   assert.equal(await save.isDisabled(), false);
 });
 
+await check('S / M / L resizes the selected box and text (Keith, 2026-11-28)', async () => {
+  const seg = (k) => page.locator('[aria-label="Line width"] button', { hasText: k });
+  await page.keyboard.press('v');
+  await page.mouse.click(...at(500, 70)); // the small box's left edge
+  const before = (await lastSync()).find((a) => a.kind === 'rect' && a.x > 490 && a.y < 60).style.width;
+  await seg('L').click();
+  const after = (await lastSync()).find((a) => a.kind === 'rect' && a.x > 490 && a.y < 60).style.width;
+  assert.equal(after / before, 2, `box line ${before} -> ${after}`);
+  await page.mouse.click(...at(112, 358)); // the text "Hello"
+  const t0 = (await lastSync()).find((a) => a.kind === 'text').style.width;
+  await seg('S').click();
+  const t1 = (await lastSync()).find((a) => a.kind === 'text').style.width;
+  assert.ok(Math.abs(t1 / t0 - 14 / 18) < 0.01, `text ${t0} -> ${t1}`);
+  await seg('M').click();
+  await page.keyboard.press('Escape');
+});
+
 await check('the capture shows when binary replies come as arrays (Mojave)', async () => {
   const p2 = await browser.newPage({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 });
   await p2.goto(`http://localhost:${port}/?editor=1&mock=array`);

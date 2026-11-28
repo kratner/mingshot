@@ -440,7 +440,9 @@ html.is-overlay body {
   height: 20px;
   padding: 0;
   border-radius: 50%;
-  border: 1px solid rgba(0, 0, 0, 0.25);
+  /* Mid grey, so the near-black swatch shows on the dark toolbar and the white one on a light one
+     (Keith, 2026-11-28: the black swatch looked missing). */
+  border: 1px solid rgba(140, 140, 140, 0.85);
   cursor: pointer;
 }
 .swatch + .swatch {

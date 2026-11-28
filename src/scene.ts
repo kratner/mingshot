@@ -88,3 +88,5 @@ export function redo(h: History): History {
 export const COLOURS = ['#E5484D', '#C9A24A', '#2B7DE9', '#12A150', '#1A1916', '#FFFFFF'];
 /** Stroke widths in points; multiplied by the capture's scale so they look the same on 1× and 2× captures. */
 export const WIDTHS = { S: 2, M: 4, L: 8 } as const;
+/** Text sizes in points for the same S / M / L buttons (Keith, 2026-11-28: S/M/L didn't change text). */
+export const TEXT_SIZES = { S: 14, M: 18, L: 28 } as const;
